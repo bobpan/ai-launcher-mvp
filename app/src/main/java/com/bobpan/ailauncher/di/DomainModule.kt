@@ -18,16 +18,19 @@ object DomainModule {
     /**
      * Provider-qualified RNG factory. Production: [Random.Default].
      * Tests override via @TestInstallIn with Random(42L) (per ARCH §7.2).
+     *
+     * @JvmSuppressWildcards prevents Kotlin from emitting Function0<? extends Random>
+     * which Dagger treats as a different type than Function0<Random>.
      */
     @Provides
     @Singleton
     @Named("recEngineRng")
-    fun provideRecEngineRng(): () -> Random = { Random.Default }
+    fun provideRecEngineRng(): @JvmSuppressWildcards () -> Random = { Random.Default }
 
     @Provides
     @Singleton
     fun provideRecommendationEngine(
-        @Named("recEngineRng") rng: () -> Random,
+        @Named("recEngineRng") rng: @JvmSuppressWildcards () -> Random,
         clock: Clock
     ): RecommendationEngine = EpsilonGreedyEngine(rng, clock)
 }

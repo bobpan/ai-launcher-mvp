@@ -20,29 +20,30 @@ class LauncherApp : Application() {
 
     override fun attachBaseContext(base: Context) {
         super.attachBaseContext(base)
-        // Install crash handler as EARLY as possible — before Hilt injection,
-        // before onCreate. Any exception in the subsequent startup chain
-        // will end up in /sdcard/Android/data/<pkg>/files/crash.log.
+        // Install crash handler as EARLY as possible.
         CrashLogger.install(base)
+        CrashLogger.crumb("LauncherApp.attachBaseContext done")
     }
 
     override fun onCreate() {
+        CrashLogger.crumb("LauncherApp.onCreate begin (pre-super)")
         super.onCreate()
-        Log.i("LauncherApp", "onCreate begin")
+        CrashLogger.crumb("LauncherApp.onCreate post-super (Hilt injected: ${::seedInstaller.isInitialized})")
+        Log.i("LauncherApp", "onCreate: Hilt injection state = ${::seedInstaller.isInitialized}")
 
-        // Fire-and-forget seed installer — also wrap in a coroutine exception
-        // handler so seed failures get captured, not silently swallowed.
         val coroutineCrash = CoroutineExceptionHandler { _, t ->
-            CrashLogger.logNonFatal(this, "SeedInstaller", t)
+            CrashLogger.logNonFatal(this, "SeedInstaller-coroutine", t)
         }
         CoroutineScope(Dispatchers.IO + SupervisorJob() + coroutineCrash).launch {
             try {
+                CrashLogger.crumb("SeedInstaller.installIfEmpty begin")
                 seedInstaller.installIfEmpty()
+                CrashLogger.crumb("SeedInstaller.installIfEmpty done")
             } catch (t: Throwable) {
                 CrashLogger.logNonFatal(this@LauncherApp, "SeedInstaller", t)
             }
         }
 
-        Log.i("LauncherApp", "onCreate done")
+        CrashLogger.crumb("LauncherApp.onCreate end")
     }
 }

@@ -30,13 +30,17 @@ class MainActivity : ComponentActivity() {
     @Inject lateinit var profileDao: UserProfileDao
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity.onCreate begin")
         super.onCreate(savedInstanceState)
+        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity post-super (injected: debugActions=${::debugActions.isInitialized}, profileDao=${::profileDao.isInitialized})")
 
         // NFR-11 / Decision #19 — edge-to-edge, light-content icons.
         WindowCompat.setDecorFitsSystemWindows(window, false)
         WindowInsetsControllerCompat(window, window.decorView).isAppearanceLightStatusBars = false
+        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity window config done")
 
         setContent {
+            com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity setContent composing")
             LauncherTheme {
                 val navController = rememberNavController()
                 val snackbarHostState = remember { SnackbarHostState() }
@@ -51,6 +55,7 @@ class MainActivity : ComponentActivity() {
                 )
             }
         }
+        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity.onCreate end")
     }
 
     override fun onResume() {

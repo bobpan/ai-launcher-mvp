@@ -1,8 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Base launcher theme. Compose drives all UI; XML theme sets pre-compose window color. -->
-    <style name="Theme.AILauncher" parent="Theme.Material3.DayNight.NoActionBar">
+    <!-- Base launcher theme. Compose drives all UI; XML theme only sets pre-compose window surfaces.
+         Using pure Android platform theme — Compose Material3 library has NO XML theme resources,
+         and we don't want to pull in com.google.android.material just for a parent style. -->
+    <style name="Theme.AILauncher" parent="android:Theme.Material.NoActionBar">
         <item name="android:windowBackground">@color/bg_deep</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

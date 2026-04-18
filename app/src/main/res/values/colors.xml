@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Core palette (sync with LauncherPalette in ui/theme/Color.kt) -->
+    <color name="bg_deep">#FF0A0F1E</color>
+    <color name="bg_elevated">#FF161A2E</color>
+    <color name="accent_blue">#FF7CB4FF</color>
+    <color name="accent_pink">#FFFF7EC8</color>
+    <color name="positive_green">#FF64E6A0</color>
+    <color name="danger_red">#FFFF6B7A</color>
+    <color name="text_primary">#FFF5F7FF</color>
+</resources>

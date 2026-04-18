@@ -2,7 +2,7 @@
 <resources xmlns:tools="http://schemas.android.com/tools">
 
     <!-- Base launcher theme. Compose drives all UI; XML theme sets pre-compose window color. -->
-    <style name="Theme.AILauncher" parent="Theme.Material3.Dark.NoActionBar">
+    <style name="Theme.AILauncher" parent="Theme.Material3.DayNight.NoActionBar">
         <item name="android:windowBackground">@color/bg_deep</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>

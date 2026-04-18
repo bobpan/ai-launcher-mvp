@@ -1,268 +1,346 @@
 # ARCHITECTURE v1 — AI Launcher MVP (v0.1)
 
-**Status:** Approved for implementation · **Owner:** Tech Architect · **Last updated:** 2026-04-18
-**Scope:** Complete technical architecture covering every FR/NFR in `docs/PRD-v2.md`.
-**Audience:** Phase 3 dev agent. This doc + `docs/PRD-v2.md` + `docs/DESIGN-v1.md` + `AGENTS.md` = complete build spec. No class names, method signatures, or DI wirings are left to inference.
+**Status:** Approved for build · **Owner:** Tech Architect · **Last updated:** 2026-04-18
+**Companion docs:** `AGENTS.md`, `docs/PRD-v2.md`, `docs/DESIGN-v1.md`
+**Scope:** The Phase 3 dev agent should be able to implement v0.1 without making architectural decisions. Every module, class, interface, DAO, DI binding, and Gradle line below is prescriptive. Where this document appears to disagree with PRD-v2 or DESIGN-v1, **PRD-v2 wins on behavior, DESIGN-v1 wins on visual/interaction, this doc wins on technical wiring**.
 
-**Tech stack (LOCKED from AGENTS.md):** Kotlin 2.0.21 · Compose BOM 2024.12.01 · Material 3 · Hilt 2.52 · Room 2.6.1 · AGP 8.7.3 · Gradle 8.11.1 · JDK 17 · minSdk 26 / targetSdk 34 · Package `com.bobpan.ailauncher`.
+**Locked tech stack (reiterated):**
+Kotlin 2.0.21 · Compose BOM 2024.12.01 · Material 3 · Hilt 2.52 · Room 2.6.1 · AGP 8.7.3 · Gradle 8.11.1 · JDK 17 · minSdk 26 · targetSdk 34 · package `com.bobpan.ailauncher`.
 
 ---
 
 ## 1. System Architecture Overview
 
-Layered MVVM with unidirectional data flow. UI observes `StateFlow<UiState>` from ViewModels; ViewModels call Repository interfaces; Repositories own Room DAOs and in-memory seed; the `RecommendationEngine` is a pure function (no state) invoked by `HomeViewModel` with a `UserProfile` snapshot + dismiss list + seeded `Random`.
+Classic MVVM + clean-layering, single-activity, single-module. Unidirectional data flow: UI → intent callbacks → ViewModel → Domain/Repo → Room → Flow → ViewModel → StateFlow → UI.
 
 ```
-┌──────────────────────────────────────────────────────────────────────────┐
-│                            PRESENTATION (ui/)                            │
-│  ┌──────────────┐  ┌───────────────┐  ┌────────────────────────────────┐ │
-│  │ HomeScreen   │  │ AppDrawerScrn │  │ ProfileDebugSheet (modal)      │ │
-│  │ + components │  │               │  │                                │ │
-│  │ (Hero/Chip/  │  │               │  │                                │ │
-│  │  Discover/   │  │               │  │                                │ │
-│  │  AiDock/     │  │               │  │                                │ │
-│  │  Banner)     │  │               │  │                                │ │
-│  └──────┬───────┘  └───────┬───────┘  └─────────────┬──────────────────┘ │
-│         │ StateFlow<HomeUiState>   │ StateFlow<...>  │ StateFlow<...>    │
-│  ┌──────▼──────────────────────────▼─────────────────▼────────────────┐  │
-│  │                     VIEWMODEL LAYER (ui/*/)                        │  │
-│  │  HomeViewModel · AppDrawerViewModel · ProfileDebugViewModel        │  │
-│  └──────┬─────────────────────────────────────────────────────────────┘  │
-└─────────┼────────────────────────────────────────────────────────────────┘
-          │ suspend fns / Flow
-┌─────────▼────────────────────────────────────────────────────────────────┐
-│                          DOMAIN (domain/recommend/)                      │
-│  RecommendationEngine (ε-greedy, pure, injected Random + Clock)          │
-└─────────┬────────────────────────────────────────────────────────────────┘
-          │ reads UserProfile snapshot
-┌─────────▼────────────────────────────────────────────────────────────────┐
-│                              DATA (data/)                                │
-│  ┌────────────────────┐  ┌────────────────────┐  ┌───────────────────┐   │
-│  │ FeedbackRepository │  │ CardRepository     │  │ ProfileRepository │   │
-│  │ (Room + Clock)     │  │ (seed + Room cache)│  │ (Room)            │   │
-│  └─────────┬──────────┘  └─────────┬──────────┘  └─────────┬─────────┘   │
-│            │ DAOs                  │ seed +DAO             │ DAO         │
-│  ┌─────────▼──────────────────────────────────────────────▼─────────┐   │
-│  │  Room: AppDatabase v1                                            │   │
-│  │    feedback_events · user_profile · cached_cards                 │   │
-│  │    fallbackToDestructiveMigration (FR-09)                        │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-│  ┌──────────────────────────────────────────────────────────────────┐   │
-│  │  In-memory: SeedCards (val SEED_CARDS)                           │   │
-│  └──────────────────────────────────────────────────────────────────┘   │
-└──────────────────────────────────────────────────────────────────────────┘
-
-                   ▲            DI (Hilt)              ▲
-                   │  DatabaseModule · RepositoryModule │
-                   │  DomainModule     · AppModule      │
-                   └────────────────────────────────────┘
+┌──────────────────────────────────────────────────────────────────┐
+│                           UI LAYER                                │
+│  (Jetpack Compose · Material 3 · single Activity)                 │
+│                                                                    │
+│   MainActivity ──► NavHost ──► HomeScreen / AppDrawerScreen       │
+│                          │                                         │
+│                          ├── HeroForYouCard                       │
+│                          ├── IntentChipStrip                      │
+│                          ├── DiscoverCard × N                     │
+│                          ├── AiDock                               │
+│                          ├── ProfileDebugSheet (overlay)          │
+│                          └── theme/ · components/                 │
+│                                                                    │
+│   stateless composables ◄── collectAsStateWithLifecycle ──┐       │
+└───────────────────────────────────────────────────────────┼──────┘
+                                                            │
+                                                            ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                        VIEWMODEL LAYER                            │
+│  (androidx.lifecycle · StateFlow · Hilt @HiltViewModel)          │
+│                                                                   │
+│   HomeViewModel ── exposes StateFlow<HomeUiState>                 │
+│   AppDrawerViewModel ── exposes StateFlow<DrawerUiState>          │
+│   ProfileDebugViewModel ── exposes StateFlow<ProfileSheetState>   │
+│                                                                   │
+│   Input: user actions (typed methods)                             │
+│   Output: immutable UiState sealed hierarchies                    │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                         DOMAIN LAYER                              │
+│  (pure Kotlin · no Android deps · deterministic)                  │
+│                                                                   │
+│   RecommendationEngine (ε-greedy stub, FR-11)                     │
+│     inputs:  intent, profile snapshot, dismiss set, catalog       │
+│     deps:    Random (seeded in tests), Clock                      │
+│     output:  List<Card> (size ≤ count)                            │
+│                                                                   │
+│   Domain models: Intent, Card, CardType, Signal, UserProfile,     │
+│                  ConfidenceLevel, AppInfo                         │
+└──────────────────────────────┬───────────────────────────────────┘
+                               │
+                               ▼
+┌──────────────────────────────────────────────────────────────────┐
+│                           DATA LAYER                              │
+│  (Room · coroutines · Flow · DataStore)                           │
+│                                                                   │
+│   Repositories (interfaces in data/repo, impls in data/repo/impl) │
+│     FeedbackRepository  ── writes events, updates profile txn     │
+│     CardRepository      ── seed + cached catalog                  │
+│     ProfileRepository   ── top tags, reset, counter (Flow)        │
+│     PackageAppsRepository ── PackageManager wrap for drawer       │
+│                                                                   │
+│   Room:  LauncherDatabase                                         │
+│     • feedback_events (FeedbackEventEntity)                       │
+│     • user_profile    (UserProfileEntry)                          │
+│     • cached_cards    (CachedCardEntity)                          │
+│     DAOs expose Flow<T> for all hot reads                         │
+│                                                                   │
+│   Seed: SeedCards.kt (hardcoded val SEED_CARDS) → installed into  │
+│         cached_cards on first boot via SeedInstaller              │
+│                                                                   │
+│   DataStore Preferences: (reserved; v0.1 uses none)               │
+└──────────────────────────────────────────────────────────────────┘
 ```
 
-**Flow of a 👍 tap (worked example):**
-`HeroCard.onLike` → `HomeViewModel.onSignal(Signal.Like(cardId))` → `FeedbackRepository.record(...)` writes `FeedbackEvent` + updates `UserProfile` in a single Room transaction (FR-10) → VM re-fetches `UserProfile` + calls `RecommendationEngine.recommend(intent, 4, profile, dismissSet, rng)` → new `HomeUiState` emitted → `HomeScreen` recomposes → Hero crossfades.
+**Threading contract.**
+- UI: Main (Compose).
+- ViewModel: `viewModelScope` default `Dispatchers.Main.immediate`; repo/engine calls hop to `Dispatchers.IO` via repo impls.
+- Room: DAO suspend funcs run on Room's built-in IO executor; Flow emissions are main-safe by Room contract.
+- Engine: synchronous, pure, runs on caller's dispatcher (called from IO inside `HomeViewModel.refresh`).
+- No `GlobalScope`. No `runBlocking`. No services. No `WorkManager`.
+
+**Navigation model.** Single `MainActivity` hosting one `NavHost` with two destinations (`home`, `drawer`). The `profile_debug` sheet is **not** a nav route — it is a Compose overlay (`ModalBottomSheet`) scoped to `HomeScreen` composition and controlled by `HomeViewModel.profileSheetOpen: Boolean`.
 
 ---
 
 ## 2. Module / Package Structure
 
-All production sources live under `app/src/main/java/com/bobpan/ailauncher/`. Every file listed is a required artifact for v0.1.
+Single Gradle module `:app`. Exact tree under `app/src/main/java/com/bobpan/ailauncher/`:
 
 ```
 app/src/main/java/com/bobpan/ailauncher/
-├── AiLauncherApp.kt                       # @HiltAndroidApp Application
-├── MainActivity.kt                        # @AndroidEntryPoint, Compose root, singleTask
+├── MainActivity.kt                              // Activity, launcher intent filter owner
+├── LauncherApp.kt                               // @HiltAndroidApp Application
+│
 ├── di/
-│   ├── DatabaseModule.kt                  # @Module @InstallIn(SingletonComponent)
-│   ├── RepositoryModule.kt                # @Module @InstallIn(SingletonComponent)
-│   ├── DomainModule.kt                    # @Module @InstallIn(SingletonComponent)
-│   └── AppModule.kt                       # Clock, Random, CoroutineDispatchers
+│   ├── AppModule.kt                             // Clock, CoroutineDispatchers
+│   ├── DatabaseModule.kt                        // Room DB + DAOs (@Provides)
+│   ├── DomainModule.kt                          // Random (@Named recEngineRng), Engine
+│   └── RepositoryModule.kt                      // @Binds interface → impl
+│
 ├── data/
 │   ├── db/
-│   │   ├── AppDatabase.kt                 # @Database v1, entities[3]
+│   │   ├── LauncherDatabase.kt                  // @Database(version=1)
+│   │   ├── Converters.kt                        // TypeConverter<List<String>> via kotlinx-serialization
 │   │   ├── entity/
 │   │   │   ├── FeedbackEventEntity.kt
 │   │   │   ├── UserProfileEntry.kt
 │   │   │   └── CachedCardEntity.kt
-│   │   ├── dao/
-│   │   │   ├── FeedbackDao.kt
-│   │   │   ├── UserProfileDao.kt
-│   │   │   └── CachedCardDao.kt
-│   │   └── Converters.kt                  # List<String> <-> JSON for tags
+│   │   └── dao/
+│   │       ├── FeedbackDao.kt
+│   │       ├── UserProfileDao.kt
+│   │       └── CardDao.kt
+│   │
 │   ├── model/
-│   │   ├── Intent.kt                      # enum COMMUTE/WORK/LUNCH/REST
-│   │   ├── CardType.kt                    # enum CONTINUE/DISCOVER/NEW/HERO
-│   │   ├── Card.kt                        # data class (domain)
-│   │   ├── SeedCard.kt                    # data class matching PRD §9 schema
-│   │   ├── Signal.kt                      # sealed class (Tap/Dwell/Like/...)
-│   │   ├── UserProfile.kt                 # data class: tagWeights + meta
-│   │   ├── ConfidenceLevel.kt             # enum LOW/MEDIUM/HIGH
-│   │   └── FeedbackEvent.kt               # domain-layer mirror of entity
+│   │   ├── Intent.kt                            // enum class Intent
+│   │   ├── CardType.kt                          // enum class CardType
+│   │   ├── Card.kt                              // immutable data class (domain)
+│   │   ├── Signal.kt                            // sealed class Signal
+│   │   ├── UserProfile.kt                       // snapshot domain model
+│   │   ├── ConfidenceLevel.kt                   // enum class (LOW/MED/HIGH)
+│   │   └── AppInfo.kt                           // drawer item
+│   │
 │   ├── seed/
-│   │   ├── SeedCards.kt                   # val SEED_CARDS: List<SeedCard>
-│   │   └── SeedLoader.kt                  # populates cached_cards on first launch
+│   │   ├── SeedCard.kt                          // val SEED_CARDS: List<Card>
+│   │   ├── SeedCards.kt                         // the 16-card catalog from PRD §9
+│   │   └── SeedInstaller.kt                     // first-boot populator
+│   │
 │   └── repo/
-│       ├── FeedbackRepository.kt          # interface
-│       ├── FeedbackRepositoryImpl.kt
-│       ├── CardRepository.kt              # interface
-│       ├── CardRepositoryImpl.kt
-│       ├── ProfileRepository.kt           # interface
-│       └── ProfileRepositoryImpl.kt
+│       ├── FeedbackRepository.kt                // interface
+│       ├── CardRepository.kt                    // interface
+│       ├── ProfileRepository.kt                 // interface
+│       ├── PackageAppsRepository.kt             // interface
+│       └── impl/
+│           ├── FeedbackRepositoryImpl.kt
+│           ├── CardRepositoryImpl.kt
+│           ├── ProfileRepositoryImpl.kt
+│           └── PackageAppsRepositoryImpl.kt
+│
 ├── domain/
 │   └── recommend/
-│       ├── RecommendationEngine.kt        # interface
-│       └── EpsilonGreedyEngine.kt         # impl (FR-11)
+│       ├── RecommendationEngine.kt              // interface
+│       └── EpsilonGreedyEngine.kt               // impl (FR-11)
+│
 ├── ui/
 │   ├── theme/
-│   │   ├── Color.kt                       # palette from AGENTS.md
-│   │   ├── Type.kt
-│   │   └── Theme.kt                       # AiLauncherTheme { ... }
-│   ├── nav/
-│   │   ├── NavGraph.kt                    # NavHost + routes
-│   │   └── Routes.kt                      # object Routes { HOME, DRAWER }
+│   │   ├── Color.kt                             // LauncherPalette + darkColorScheme
+│   │   ├── Type.kt                              // LauncherTypography
+│   │   ├── Shape.kt                             // LauncherShapes
+│   │   ├── Motion.kt                            // Motion tokens (object)
+│   │   ├── Glass.kt                             // GlassTokens + glassSurface Modifier
+│   │   └── Theme.kt                             // @Composable LauncherTheme
+│   │
 │   ├── home/
-│   │   ├── HomeScreen.kt
-│   │   ├── HomeViewModel.kt
-│   │   └── HomeUiState.kt                 # sealed class
+│   │   ├── HomeScreen.kt                        // @Composable top-level
+│   │   ├── HomeViewModel.kt                     // @HiltViewModel
+│   │   ├── HomeUiState.kt                       // sealed + data class HomeContent
+│   │   └── HeaderRow.kt
+│   │
 │   ├── components/
-│   │   ├── HeroCard.kt
-│   │   ├── IntentChipStrip.kt
-│   │   ├── DiscoverCard.kt
-│   │   ├── DiscoverFeed.kt
+│   │   ├── HeroForYouCard.kt
+│   │   ├── IntentChip.kt                        // + IntentChipStrip
+│   │   ├── DiscoverCard.kt                      // + NewPill
 │   │   ├── AiDock.kt
-│   │   ├── Header.kt
-│   │   ├── DefaultLauncherBanner.kt       # FR-17
-│   │   ├── EmptyStateCard.kt              # FR-19
-│   │   └── DwellTracker.kt                # onGloballyPositioned logic (FR-07)
+│   │   ├── ConfidenceBar.kt
+│   │   ├── FeedbackButtonRow.kt
+│   │   ├── DefaultLauncherBanner.kt
+│   │   └── EmptyIntentState.kt
+│   │
 │   ├── profile/
-│   │   ├── ProfileDebugSheet.kt
-│   │   ├── ProfileDebugViewModel.kt
-│   │   └── ProfileDebugUiState.kt         # sealed class
-│   └── drawer/
-│       ├── AppDrawerScreen.kt
-│       ├── AppDrawerViewModel.kt
-│       └── AppDrawerUiState.kt            # sealed class
+│   │   ├── ProfileDebugSheet.kt                 // @Composable ModalBottomSheet
+│   │   ├── ProfileDebugRow.kt
+│   │   ├── ProfileDebugViewModel.kt             // @HiltViewModel
+│   │   └── ProfileSheetState.kt                 // sealed
+│   │
+│   ├── drawer/
+│   │   ├── AppDrawerScreen.kt
+│   │   ├── AppIconTile.kt
+│   │   ├── AppDrawerViewModel.kt                // @HiltViewModel
+│   │   └── DrawerUiState.kt                     // sealed
+│   │
+│   └── nav/
+│       └── LauncherNavHost.kt                   // NavHost + routes
+│
 └── util/
-    ├── Clock.kt                           # interface + SystemClock impl
-    ├── Logging.kt                         # FLYWHEEL logcat tag helpers (FR-20)
-    ├── PackageManagerExt.kt               # installed-apps query
-    └── ComposeExt.kt                      # minimumInteractiveComponentSize helpers
+    ├── Clock.kt                                 // interface + SystemClock impl
+    ├── Dispatchers.kt                           // AppDispatchers (IO/Main/Default)
+    ├── Dwell.kt                                 // per-card appearance tracker (FR-07)
+    ├── DefaultLauncherCheck.kt                  // PackageManager helper
+    └── Ext.kt                                   // small extensions
 ```
 
-**Test sources:**
-
+**Root project paths (not under the Kotlin source set):**
 ```
-app/src/test/java/com/bobpan/ailauncher/        # JVM unit tests
-├── domain/recommend/EpsilonGreedyEngineTest.kt
-├── ui/home/HomeViewModelTest.kt
-├── ui/drawer/AppDrawerViewModelTest.kt
-├── ui/profile/ProfileDebugViewModelTest.kt
-├── fakes/
-│   ├── FakeFeedbackRepository.kt
-│   ├── FakeCardRepository.kt
-│   ├── FakeProfileRepository.kt
-│   └── TestClock.kt
-└── util/MainDispatcherRule.kt
-
-app/src/androidTest/java/com/bobpan/ailauncher/  # Instrumented
-├── data/db/FeedbackDaoTest.kt
-├── data/db/UserProfileDaoTest.kt
-└── data/db/CachedCardDaoTest.kt
+/
+├── settings.gradle.kts
+├── build.gradle.kts                             // project-level
+├── gradle.properties
+├── gradle/
+│   └── libs.versions.toml
+└── app/
+    ├── build.gradle.kts                         // app-level
+    └── src/
+        ├── main/
+        │   ├── AndroidManifest.xml
+        │   ├── java/com/bobpan/ailauncher/…
+        │   └── res/
+        │       ├── values/
+        │       │   ├── strings.xml
+        │       │   ├── themes.xml
+        │       │   └── colors.xml
+        │       └── xml/
+        │           └── backup_rules.xml
+        ├── test/
+        │   └── java/com/bobpan/ailauncher/…    // unit tests
+        └── androidTest/
+            └── java/com/bobpan/ailauncher/…    // instrumented tests (minimal)
 ```
 
 ---
 
 ## 3. Gradle Configuration
 
-### 3.1 `gradle/libs.versions.toml`
+### 3.1 `gradle/libs.versions.toml` (version catalog — single source of truth)
 
 ```toml
 [versions]
-agp = "8.7.3"
-kotlin = "2.0.21"
-ksp = "2.0.21-1.0.28"
-coreKtx = "1.13.1"
-activityCompose = "1.9.3"
-composeBom = "2024.12.01"
-lifecycle = "2.8.7"
-hilt = "2.52"
-hiltNavigationCompose = "1.2.0"
-room = "2.6.1"
-datastore = "1.1.1"
-navigationCompose = "2.8.4"
-kotlinxSerialization = "1.7.3"
-kotlinxCoroutines = "1.9.0"
-junit = "4.13.2"
-androidxTestJunit = "1.2.1"
-androidxTestRunner = "1.6.2"
-androidxTestCore = "1.6.1"
-mockk = "1.13.13"
-espresso = "3.6.1"
+# Build
+agp                       = "8.7.3"
+kotlin                    = "2.0.21"
+ksp                       = "2.0.21-1.0.27"
+
+# AndroidX core
+coreKtx                   = "1.13.1"
+activityCompose           = "1.9.3"
+lifecycle                 = "2.8.7"
+navigationCompose         = "2.8.4"
+datastore                 = "1.1.1"
+
+# Compose (via BOM)
+composeBom                = "2024.12.01"
+
+# DI
+hilt                      = "2.52"
+hiltNavCompose            = "1.2.0"
+
+# Persistence
+room                      = "2.6.1"
+
+# Kotlinx
+coroutines                = "1.9.0"
+serializationJson         = "1.7.3"
+
+# Testing
+junit                     = "4.13.2"
+androidxTestExt           = "1.2.1"
+androidxTestEspresso      = "3.6.1"
+mockk                     = "1.13.13"
+coroutinesTest            = "1.9.0"
+turbine                   = "1.2.0"
+roomTesting               = "2.6.1"
 
 [libraries]
-androidx-core-ktx               = { module = "androidx.core:core-ktx",                             version.ref = "coreKtx" }
-androidx-activity-compose       = { module = "androidx.activity:activity-compose",                 version.ref = "activityCompose" }
-androidx-compose-bom            = { module = "androidx.compose:compose-bom",                       version.ref = "composeBom" }
-androidx-compose-ui             = { module = "androidx.compose.ui:ui" }
-androidx-compose-ui-graphics    = { module = "androidx.compose.ui:ui-graphics" }
-androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
-androidx-compose-ui-tooling     = { module = "androidx.compose.ui:ui-tooling" }
-androidx-compose-material3      = { module = "androidx.compose.material3:material3" }
-androidx-compose-material-icons = { module = "androidx.compose.material:material-icons-extended" }
+# AndroidX core
+androidx-core-ktx                  = { module = "androidx.core:core-ktx",                         version.ref = "coreKtx" }
+androidx-activity-compose          = { module = "androidx.activity:activity-compose",             version.ref = "activityCompose" }
 androidx-lifecycle-viewmodel-compose = { module = "androidx.lifecycle:lifecycle-viewmodel-compose", version.ref = "lifecycle" }
-androidx-lifecycle-runtime-ktx  = { module = "androidx.lifecycle:lifecycle-runtime-ktx",           version.ref = "lifecycle" }
-androidx-lifecycle-runtime-compose = { module = "androidx.lifecycle:lifecycle-runtime-compose",    version.ref = "lifecycle" }
-androidx-navigation-compose     = { module = "androidx.navigation:navigation-compose",             version.ref = "navigationCompose" }
-hilt-android                    = { module = "com.google.dagger:hilt-android",                     version.ref = "hilt" }
-hilt-compiler                   = { module = "com.google.dagger:hilt-android-compiler",            version.ref = "hilt" }
-hilt-navigation-compose         = { module = "androidx.hilt:hilt-navigation-compose",              version.ref = "hiltNavigationCompose" }
-room-runtime                    = { module = "androidx.room:room-runtime",                         version.ref = "room" }
-room-compiler                   = { module = "androidx.room:room-compiler",                        version.ref = "room" }
-room-ktx                        = { module = "androidx.room:room-ktx",                             version.ref = "room" }
-room-testing                    = { module = "androidx.room:room-testing",                         version.ref = "room" }
-datastore-preferences           = { module = "androidx.datastore:datastore-preferences",           version.ref = "datastore" }
-kotlinx-serialization-json      = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json",   version.ref = "kotlinxSerialization" }
-kotlinx-coroutines-android      = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android",   version.ref = "kotlinxCoroutines" }
-kotlinx-coroutines-test         = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test",      version.ref = "kotlinxCoroutines" }
-junit                           = { module = "junit:junit",                                        version.ref = "junit" }
-androidx-test-junit             = { module = "androidx.test.ext:junit",                            version.ref = "androidxTestJunit" }
-androidx-test-core              = { module = "androidx.test:core",                                 version.ref = "androidxTestCore" }
-androidx-test-runner            = { module = "androidx.test:runner",                               version.ref = "androidxTestRunner" }
-androidx-test-espresso-core     = { module = "androidx.test.espresso:espresso-core",               version.ref = "espresso" }
-mockk                           = { module = "io.mockk:mockk",                                     version.ref = "mockk" }
-mockk-android                   = { module = "io.mockk:mockk-android",                             version.ref = "mockk" }
+androidx-lifecycle-runtime-compose   = { module = "androidx.lifecycle:lifecycle-runtime-compose",   version.ref = "lifecycle" }
+androidx-lifecycle-runtime-ktx       = { module = "androidx.lifecycle:lifecycle-runtime-ktx",       version.ref = "lifecycle" }
+androidx-navigation-compose        = { module = "androidx.navigation:navigation-compose",         version.ref = "navigationCompose" }
+androidx-datastore-preferences     = { module = "androidx.datastore:datastore-preferences",       version.ref = "datastore" }
+
+# Compose BOM + libs
+androidx-compose-bom                = { module = "androidx.compose:compose-bom",                  version.ref = "composeBom" }
+androidx-compose-ui                 = { module = "androidx.compose.ui:ui" }
+androidx-compose-ui-graphics        = { module = "androidx.compose.ui:ui-graphics" }
+androidx-compose-ui-tooling         = { module = "androidx.compose.ui:ui-tooling" }
+androidx-compose-ui-tooling-preview = { module = "androidx.compose.ui:ui-tooling-preview" }
+androidx-compose-ui-test-junit4     = { module = "androidx.compose.ui:ui-test-junit4" }
+androidx-compose-ui-test-manifest   = { module = "androidx.compose.ui:ui-test-manifest" }
+androidx-compose-material3          = { module = "androidx.compose.material3:material3" }
+androidx-compose-material-icons-extended = { module = "androidx.compose.material:material-icons-extended" }
+
+# Hilt
+hilt-android                        = { module = "com.google.dagger:hilt-android",                version.ref = "hilt" }
+hilt-android-compiler               = { module = "com.google.dagger:hilt-android-compiler",       version.ref = "hilt" }
+androidx-hilt-navigation-compose    = { module = "androidx.hilt:hilt-navigation-compose",         version.ref = "hiltNavCompose" }
+
+# Room
+androidx-room-runtime               = { module = "androidx.room:room-runtime",                    version.ref = "room" }
+androidx-room-ktx                   = { module = "androidx.room:room-ktx",                        version.ref = "room" }
+androidx-room-compiler              = { module = "androidx.room:room-compiler",                   version.ref = "room" }
+androidx-room-testing               = { module = "androidx.room:room-testing",                    version.ref = "roomTesting" }
+
+# Kotlinx
+kotlinx-coroutines-core             = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-core", version.ref = "coroutines" }
+kotlinx-coroutines-android          = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-android", version.ref = "coroutines" }
+kotlinx-serialization-json          = { module = "org.jetbrains.kotlinx:kotlinx-serialization-json", version.ref = "serializationJson" }
+
+# Unit testing
+junit                               = { module = "junit:junit",                                   version.ref = "junit" }
+mockk                               = { module = "io.mockk:mockk",                                version.ref = "mockk" }
+kotlinx-coroutines-test             = { module = "org.jetbrains.kotlinx:kotlinx-coroutines-test", version.ref = "coroutinesTest" }
+turbine                             = { module = "app.cash.turbine:turbine",                      version.ref = "turbine" }
+
+# Instrumented testing
+androidx-test-ext-junit             = { module = "androidx.test.ext:junit",                       version.ref = "androidxTestExt" }
+androidx-test-espresso-core         = { module = "androidx.test.espresso:espresso-core",          version.ref = "androidxTestEspresso" }
 
 [plugins]
-android-application    = { id = "com.android.application",             version.ref = "agp" }
-kotlin-android         = { id = "org.jetbrains.kotlin.android",        version.ref = "kotlin" }
-kotlin-compose         = { id = "org.jetbrains.kotlin.plugin.compose", version.ref = "kotlin" }
-kotlin-serialization   = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
-ksp                    = { id = "com.google.devtools.ksp",             version.ref = "ksp" }
-hilt                   = { id = "com.google.dagger.hilt.android",      version.ref = "hilt" }
+android-application     = { id = "com.android.application",                version.ref = "agp" }
+kotlin-android          = { id = "org.jetbrains.kotlin.android",           version.ref = "kotlin" }
+kotlin-compose          = { id = "org.jetbrains.kotlin.plugin.compose",    version.ref = "kotlin" }
+kotlin-serialization    = { id = "org.jetbrains.kotlin.plugin.serialization", version.ref = "kotlin" }
+ksp                     = { id = "com.google.devtools.ksp",                version.ref = "ksp" }
+hilt                    = { id = "com.google.dagger.hilt.android",         version.ref = "hilt" }
 ```
 
-### 3.2 Project-level `build.gradle.kts`
-
-```kotlin
-plugins {
-    alias(libs.plugins.android.application) apply false
-    alias(libs.plugins.kotlin.android) apply false
-    alias(libs.plugins.kotlin.compose) apply false
-    alias(libs.plugins.kotlin.serialization) apply false
-    alias(libs.plugins.ksp) apply false
-    alias(libs.plugins.hilt) apply false
-}
-```
-
-### 3.3 `settings.gradle.kts`
+### 3.2 `settings.gradle.kts`
 
 ```kotlin
 pluginManagement {
     repositories {
-        google()
+        google {
+            content {
+                includeGroupByRegex("com\\.android.*")
+                includeGroupByRegex("com\\.google.*")
+                includeGroupByRegex("androidx.*")
+            }
+        }
         mavenCentral()
         gradlePluginPortal()
     }
 }
+
 dependencyResolutionManagement {
     repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
     repositories {
@@ -270,8 +348,22 @@ dependencyResolutionManagement {
         mavenCentral()
     }
 }
-rootProject.name = "ai-launcher-mvp"
+
+rootProject.name = "AI Launcher"
 include(":app")
+```
+
+### 3.3 Project-level `build.gradle.kts`
+
+```kotlin
+plugins {
+    alias(libs.plugins.android.application)   apply false
+    alias(libs.plugins.kotlin.android)        apply false
+    alias(libs.plugins.kotlin.compose)        apply false
+    alias(libs.plugins.kotlin.serialization)  apply false
+    alias(libs.plugins.ksp)                   apply false
+    alias(libs.plugins.hilt)                  apply false
+}
 ```
 
 ### 3.4 App-level `app/build.gradle.kts`
@@ -287,15 +379,16 @@ plugins {
 }
 
 android {
-    namespace = "com.bobpan.ailauncher"
+    namespace  = "com.bobpan.ailauncher"
     compileSdk = 34
 
     defaultConfig {
         applicationId = "com.bobpan.ailauncher"
-        minSdk = 26
-        targetSdk = 34
-        versionCode = 1
-        versionName = "0.1.0"
+        minSdk        = 26
+        targetSdk     = 34
+        versionCode   = 1
+        versionName   = "0.1.0"
+
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         vectorDrawables { useSupportLibrary = true }
     }
@@ -303,11 +396,16 @@ android {
     buildTypes {
         debug {
             isMinifyEnabled = false
+            buildConfigField("Boolean", "DETERMINISTIC_ENGINE", "true")
         }
         release {
-            isMinifyEnabled = true
-            isShrinkResources = true
-            proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
+            isMinifyEnabled   = false            // v0.1 ships debug-signed per CI
+            isShrinkResources = false
+            buildConfigField("Boolean", "DETERMINISTIC_ENGINE", "false")
+            proguardFiles(
+                getDefaultProguardFile("proguard-android-optimize.txt"),
+                "proguard-rules.pro"
+            )
         }
     }
 
@@ -315,20 +413,30 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
-    kotlinOptions { jvmTarget = "17" }
+    kotlinOptions {
+        jvmTarget = "17"
+    }
 
     buildFeatures {
-        compose = true
+        compose     = true
         buildConfig = true
     }
 
     packaging {
-        resources.excludes += "/META-INF/{AL2.0,LGPL2.1}"
+        resources.excludes += setOf(
+            "/META-INF/{AL2.0,LGPL2.1}",
+            "/META-INF/LICENSE*",
+        )
     }
 
     testOptions {
-        unitTests.isIncludeAndroidResources = true
+        unitTests.isReturnDefaultValues = true
     }
+}
+
+ksp {
+    arg("room.schemaLocation", "$projectDir/schemas")
+    arg("room.incremental",    "true")
 }
 
 dependencies {
@@ -337,76 +445,72 @@ dependencies {
     implementation(libs.androidx.activity.compose)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.runtime.compose)
+    implementation(libs.androidx.lifecycle.viewmodel.compose)
+    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.datastore.preferences)
 
-    // Compose (BOM-managed)
+    // Compose BOM
     implementation(platform(libs.androidx.compose.bom))
     implementation(libs.androidx.compose.ui)
     implementation(libs.androidx.compose.ui.graphics)
     implementation(libs.androidx.compose.ui.tooling.preview)
     implementation(libs.androidx.compose.material3)
-    implementation(libs.androidx.compose.material.icons)
-    implementation(libs.androidx.lifecycle.viewmodel.compose)
-    implementation(libs.androidx.navigation.compose)
+    implementation(libs.androidx.compose.material.icons.extended)
     debugImplementation(libs.androidx.compose.ui.tooling)
+    debugImplementation(libs.androidx.compose.ui.test.manifest)
 
-    // Hilt
+    // DI
     implementation(libs.hilt.android)
-    implementation(libs.hilt.navigation.compose)
-    ksp(libs.hilt.compiler)
+    ksp(libs.hilt.android.compiler)
+    implementation(libs.androidx.hilt.navigation.compose)
 
     // Room
-    implementation(libs.room.runtime)
-    implementation(libs.room.ktx)
-    ksp(libs.room.compiler)
+    implementation(libs.androidx.room.runtime)
+    implementation(libs.androidx.room.ktx)
+    ksp(libs.androidx.room.compiler)
 
-    // Misc
-    implementation(libs.datastore.preferences)
-    implementation(libs.kotlinx.serialization.json)
+    // Kotlinx
+    implementation(libs.kotlinx.coroutines.core)
     implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.kotlinx.serialization.json)
 
-    // Unit tests (JVM)
+    // Unit tests
     testImplementation(libs.junit)
-    testImplementation(libs.kotlinx.coroutines.test)
     testImplementation(libs.mockk)
+    testImplementation(libs.kotlinx.coroutines.test)
+    testImplementation(libs.turbine)
 
     // Instrumented tests
-    androidTestImplementation(libs.androidx.test.core)
-    androidTestImplementation(libs.androidx.test.junit)
-    androidTestImplementation(libs.androidx.test.runner)
+    androidTestImplementation(libs.androidx.test.ext.junit)
     androidTestImplementation(libs.androidx.test.espresso.core)
-    androidTestImplementation(libs.room.testing)
-    androidTestImplementation(libs.mockk.android)
-    androidTestImplementation(libs.kotlinx.coroutines.test)
     androidTestImplementation(platform(libs.androidx.compose.bom))
+    androidTestImplementation(libs.androidx.compose.ui.test.junit4)
+    androidTestImplementation(libs.androidx.room.testing)
 }
 ```
 
-**gradle.properties additions (required):**
+### 3.5 `gradle.properties` (required entries)
 
 ```properties
+org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+org.gradle.parallel=true
+org.gradle.caching=true
+org.gradle.configureondemand=false
 android.useAndroidX=true
-kotlin.code.style=official
-org.gradle.jvmargs=-Xmx4g -Dfile.encoding=UTF-8
 android.nonTransitiveRClass=true
+kotlin.code.style=official
 ksp.incremental=true
 ```
 
 ---
 
-## 4. Data Layer (Room)
+## 4. Data Layer
 
-### 4.1 Entity: `FeedbackEventEntity`
+### 4.1 Entities
 
-File: `data/db/entity/FeedbackEventEntity.kt`
+#### `FeedbackEventEntity`
 
-| Column        | Kotlin type | SQLite type | Notes |
-|---------------|-------------|-------------|-------|
-| `id`          | `Long`      | INTEGER PK autogen |   |
-| `card_id`     | `String`    | TEXT NOT NULL | indexed |
-| `intent`      | `String`    | TEXT NOT NULL | `Intent.name` |
-| `signal`      | `String`    | TEXT NOT NULL | `SignalType.name` (flat enum, see §5) |
-| `weight`      | `Float`     | REAL NOT NULL |   |
-| `timestamp_ms`| `Long`      | INTEGER NOT NULL | from injected `Clock.nowMillis()` |
+Persists every Signal emission (PRD FR-09).
 
 ```kotlin
 @Entity(
@@ -418,55 +522,36 @@ File: `data/db/entity/FeedbackEventEntity.kt`
     ]
 )
 data class FeedbackEventEntity(
-    @PrimaryKey(autoGenerate = true) val id: Long = 0L,
+    @PrimaryKey(autoGenerate = true)
+    val id: Long = 0L,
     @ColumnInfo(name = "card_id")      val cardId: String,
-    @ColumnInfo(name = "intent")       val intent: String,
-    @ColumnInfo(name = "signal")       val signal: String,
+    @ColumnInfo(name = "intent")       val intent: String,   // Intent.name
+    @ColumnInfo(name = "signal")       val signal: String,   // SignalType.name
     @ColumnInfo(name = "weight")       val weight: Float,
     @ColumnInfo(name = "timestamp_ms") val timestampMs: Long
 )
 ```
 
-### 4.2 Entity: `UserProfileEntry`
+#### `UserProfileEntry`
 
-File: `data/db/entity/UserProfileEntry.kt`
-
-| Column       | Kotlin type | SQLite type | Notes |
-|--------------|-------------|-------------|-------|
-| `tag`        | `String`    | TEXT PK NOT NULL |   |
-| `weight`     | `Float`     | REAL NOT NULL |   |
-| `updated_ms` | `Long`      | INTEGER NOT NULL |   |
+One row per tag; running weight (PRD FR-10).
 
 ```kotlin
 @Entity(
     tableName = "user_profile",
-    indices = [Index(value = ["weight"])]   // supports ORDER BY weight DESC LIMIT 10
+    indices = [Index(value = ["weight"])]   // top-tag query hot path
 )
 data class UserProfileEntry(
-    @PrimaryKey                        val tag: String,
+    @PrimaryKey
+    @ColumnInfo(name = "tag")          val tag: String,
     @ColumnInfo(name = "weight")       val weight: Float,
     @ColumnInfo(name = "updated_ms")   val updatedMs: Long
 )
 ```
 
-### 4.3 Entity: `CachedCardEntity`
+#### `CachedCardEntity`
 
-File: `data/db/entity/CachedCardEntity.kt`
-
-Cards are primarily served from `SEED_CARDS` in-memory (FR-16). `cached_cards` exists for the "Room cache" role named in AGENTS.md and allows future dynamic catalogs without a schema bump. The seed loader writes all 16 cards to this table on first launch; the repo returns the in-memory list in v0.1.
-
-| Column           | Kotlin type    | SQLite type | Notes |
-|------------------|----------------|-------------|-------|
-| `id`             | `String`       | TEXT PK NOT NULL | stable seed id |
-| `title`          | `String`       | TEXT NOT NULL |   |
-| `description`    | `String`       | TEXT NOT NULL |   |
-| `intent`         | `String`       | TEXT NOT NULL | indexed |
-| `type`           | `String`       | TEXT NOT NULL | `CardType.name` |
-| `icon`           | `String`       | TEXT NOT NULL | emoji |
-| `action_label`   | `String`       | TEXT NOT NULL |   |
-| `why_label`      | `String`       | TEXT NOT NULL |   |
-| `tags_json`      | `String`       | TEXT NOT NULL | JSON-encoded `List<String>` via `Converters` |
-| `seed_order`     | `Int`          | INTEGER NOT NULL | 0-based declaration order, for tiebreaker |
+Seed catalog materialized into DB on first boot. Tag list serialized as JSON.
 
 ```kotlin
 @Entity(
@@ -474,31 +559,43 @@ Cards are primarily served from `SEED_CARDS` in-memory (FR-16). `cached_cards` e
     indices = [Index(value = ["intent"])]
 )
 data class CachedCardEntity(
-    @PrimaryKey                       val id: String,
-    val title: String,
-    val description: String,
-    val intent: String,
-    val type: String,
-    val icon: String,
-    @ColumnInfo(name = "action_label") val actionLabel: String,
-    @ColumnInfo(name = "why_label")    val whyLabel: String,
-    @ColumnInfo(name = "tags_json")    val tagsJson: String,
-    @ColumnInfo(name = "seed_order")   val seedOrder: Int
+    @PrimaryKey
+    @ColumnInfo(name = "id")            val id: String,
+    @ColumnInfo(name = "title")         val title: String,
+    @ColumnInfo(name = "description")   val description: String,
+    @ColumnInfo(name = "intent")        val intent: String,       // Intent.name
+    @ColumnInfo(name = "type")          val type: String,         // CardType.name
+    @ColumnInfo(name = "icon")          val icon: String,         // emoji
+    @ColumnInfo(name = "action_label")  val actionLabel: String,
+    @ColumnInfo(name = "why_label")     val whyLabel: String,
+    @ColumnInfo(name = "tags_json")     val tagsJson: String,     // JSON-serialized List<String>
+    @ColumnInfo(name = "seed_order")    val seedOrder: Int        // stable ordering
 )
 ```
 
-### 4.4 DAOs
+#### `Converters.kt`
 
-**`FeedbackDao`** — `data/db/dao/FeedbackDao.kt`
+```kotlin
+class Converters @Inject constructor(
+    private val json: Json   // provided by DomainModule
+) {
+    @TypeConverter fun tagsToJson(list: List<String>): String = json.encodeToString(list)
+    @TypeConverter fun jsonToTags(raw: String): List<String>  = json.decodeFromString(raw)
+}
+```
+
+(Converters are registered via `@TypeConverters(Converters::class)` on the DB.)
+
+### 4.2 DAOs
+
+#### `FeedbackDao`
 
 ```kotlin
 @Dao
 interface FeedbackDao {
+
     @Insert(onConflict = OnConflictStrategy.ABORT)
     suspend fun insert(event: FeedbackEventEntity): Long
-
-    @Query("SELECT * FROM feedback_events ORDER BY timestamp_ms DESC")
-    suspend fun getAll(): List<FeedbackEventEntity>
 
     @Query("SELECT COUNT(*) FROM feedback_events")
     suspend fun count(): Int
@@ -506,82 +603,77 @@ interface FeedbackDao {
     @Query("SELECT COUNT(*) FROM feedback_events")
     fun countFlow(): Flow<Int>
 
-    @Query("""
-        SELECT * FROM feedback_events
-        WHERE card_id = :cardId AND signal = :signalName
-          AND timestamp_ms >= :sinceMs
-        ORDER BY timestamp_ms DESC LIMIT 1
-    """)
-    suspend fun latestForDebounce(cardId: String, signalName: String, sinceMs: Long): FeedbackEventEntity?
+    @Query("SELECT * FROM feedback_events ORDER BY timestamp_ms DESC")
+    fun observeAll(): Flow<List<FeedbackEventEntity>>
+
+    @Query("SELECT * FROM feedback_events ORDER BY timestamp_ms DESC LIMIT :limit")
+    suspend fun recent(limit: Int): List<FeedbackEventEntity>
 
     @Query("DELETE FROM feedback_events")
-    suspend fun deleteAll()
+    suspend fun clear()
 }
 ```
 
-**`UserProfileDao`** — `data/db/dao/UserProfileDao.kt`
+#### `UserProfileDao`
 
 ```kotlin
 @Dao
 interface UserProfileDao {
-    @Query("SELECT * FROM user_profile WHERE tag = :tag LIMIT 1")
-    suspend fun getByTag(tag: String): UserProfileEntry?
 
-    @Insert(onConflict = OnConflictStrategy.REPLACE)
-    suspend fun upsert(entry: UserProfileEntry)
-
-    @Query("SELECT * FROM user_profile")
-    suspend fun getAll(): List<UserProfileEntry>
+    /** Upsert used by FR-10 transactional update. */
+    @Query("""
+        INSERT INTO user_profile (tag, weight, updated_ms)
+        VALUES (:tag, :delta, :now)
+        ON CONFLICT(tag) DO UPDATE SET
+            weight = weight + :delta,
+            updated_ms = :now
+    """)
+    suspend fun upsertDelta(tag: String, delta: Float, now: Long)
 
     @Query("SELECT * FROM user_profile")
     fun observeAll(): Flow<List<UserProfileEntry>>
 
-    @Query("SELECT * FROM user_profile ORDER BY ABS(weight) DESC LIMIT :n")
-    suspend fun topByAbsWeight(n: Int): List<UserProfileEntry>
+    @Query("SELECT * FROM user_profile ORDER BY ABS(weight) DESC LIMIT :limit")
+    fun observeTopByAbs(limit: Int): Flow<List<UserProfileEntry>>
+
+    @Query("SELECT * FROM user_profile ORDER BY weight DESC LIMIT :limit")
+    suspend fun topPositive(limit: Int): List<UserProfileEntry>
+
+    @Query("SELECT * FROM user_profile")
+    suspend fun snapshot(): List<UserProfileEntry>
 
     @Query("DELETE FROM user_profile")
-    suspend fun deleteAll()
+    suspend fun clear()
 }
 ```
 
-**`CachedCardDao`** — `data/db/dao/CachedCardDao.kt`
+#### `CardDao`
 
 ```kotlin
 @Dao
-interface CachedCardDao {
-    @Query("SELECT COUNT(*) FROM cached_cards")
-    suspend fun count(): Int
+interface CardDao {
 
     @Insert(onConflict = OnConflictStrategy.REPLACE)
     suspend fun insertAll(cards: List<CachedCardEntity>)
 
+    @Query("SELECT COUNT(*) FROM cached_cards")
+    suspend fun count(): Int
+
     @Query("SELECT * FROM cached_cards ORDER BY seed_order ASC")
-    suspend fun getAll(): List<CachedCardEntity>
+    fun observeAll(): Flow<List<CachedCardEntity>>
 
     @Query("SELECT * FROM cached_cards WHERE intent = :intent ORDER BY seed_order ASC")
-    suspend fun getByIntent(intent: String): List<CachedCardEntity>
+    fun observeByIntent(intent: String): Flow<List<CachedCardEntity>>
+
+    @Query("SELECT * FROM cached_cards WHERE intent = :intent ORDER BY seed_order ASC")
+    suspend fun byIntent(intent: String): List<CachedCardEntity>
+
+    @Query("SELECT * FROM cached_cards ORDER BY seed_order ASC")
+    suspend fun all(): List<CachedCardEntity>
 }
 ```
 
-### 4.5 Converters
-
-File: `data/db/Converters.kt`
-
-```kotlin
-class Converters {
-    private val json = Json { ignoreUnknownKeys = true }
-
-    @TypeConverter
-    fun fromTags(list: List<String>): String = json.encodeToString(list)
-
-    @TypeConverter
-    fun toTags(raw: String): List<String> = json.decodeFromString(raw)
-}
-```
-
-### 4.6 Database
-
-File: `data/db/AppDatabase.kt`
+### 4.3 Database
 
 ```kotlin
 @Database(
@@ -594,242 +686,239 @@ File: `data/db/AppDatabase.kt`
     exportSchema = true
 )
 @TypeConverters(Converters::class)
-abstract class AppDatabase : RoomDatabase() {
-    abstract fun feedbackDao(): FeedbackDao
+abstract class LauncherDatabase : RoomDatabase() {
+    abstract fun feedbackDao():    FeedbackDao
     abstract fun userProfileDao(): UserProfileDao
-    abstract fun cachedCardDao(): CachedCardDao
+    abstract fun cardDao():        CardDao
 
     companion object {
-        const val NAME = "ai_launcher.db"
+        const val NAME = "launcher.db"
     }
 }
 ```
 
-Builder (in `DatabaseModule`, §9) MUST apply:
+**Migration policy (FR-09):** `.fallbackToDestructiveMigration()` is enabled in the builder (see §9 DI). This is documented in release notes; v0.1 does not ship migration logic.
+
+**Transactional write (FR-10):** the combined `insert(event) + upsertDelta(tag, Δ) * N` operation is wrapped in a `@Transaction` suspend function on `FeedbackRepositoryImpl` using `database.withTransaction { ... }` (from `androidx.room:room-ktx`). Either all writes succeed or none do.
+
+### 4.4 Seed data & installer
+
+`data/seed/SeedCards.kt` declares a `val SEED_CARDS: List<Card>` — 16 entries matching PRD-v2 §9 exactly (id/intent/type/tags load-bearing; text fields from DESIGN-v1 §8.3 copywriting table).
 
 ```kotlin
-Room.databaseBuilder(ctx, AppDatabase::class.java, AppDatabase.NAME)
-    .fallbackToDestructiveMigration()           // FR-09
-    .fallbackToDestructiveMigrationOnDowngrade()
-    .build()
+// data/seed/SeedCards.kt
+val SEED_CARDS: List<Card> = listOf(
+    Card(id = "commute_01", intent = Intent.COMMUTE, type = CardType.CONTINUE,
+         icon = "🎧", title = "继续听《三体》",
+         description = "上次停在第 14 章，还剩 23 分钟",
+         actionLabel = "继续播放", whyLabel = "示例：你在听的有声书",
+         tags = listOf("audiobook","scifi","commute","morning"),
+         seedOrder = 0),
+    // … 15 more, indexing seedOrder 1..15 in the exact declaration order from PRD §9
+)
 ```
 
-Room schema JSON is exported to `app/schemas/` by setting KSP arg `room.schemaLocation=$projectDir/schemas` in `app/build.gradle.kts` under `ksp { arg("room.schemaLocation", "$projectDir/schemas") }`.
-
-### 4.7 Seed Data Loader
-
-File: `data/seed/SeedLoader.kt`
+`data/seed/SeedInstaller.kt` populates `cached_cards` on first boot:
 
 ```kotlin
-@Singleton
-class SeedLoader @Inject constructor(
-    private val cachedCardDao: CachedCardDao,
-    private val json: Json,
-    @Named("ioDispatcher") private val io: CoroutineDispatcher
+class SeedInstaller @Inject constructor(
+    private val cardDao: CardDao,
+    private val json:    Json,
+    private val dispatchers: AppDispatchers
 ) {
-    suspend fun ensureSeeded() = withContext(io) {
-        if (cachedCardDao.count() == 0) {
-            val entities = SEED_CARDS.mapIndexed { index, s ->
-                CachedCardEntity(
-                    id = s.id,
-                    title = s.title,
-                    description = s.description,
-                    intent = s.intent.name,
-                    type = s.type.name,
-                    icon = s.icon,
-                    actionLabel = s.actionLabel,
-                    whyLabel = s.whyLabel,
-                    tagsJson = json.encodeToString(s.tags),
-                    seedOrder = index
-                )
-            }
-            cachedCardDao.insertAll(entities)
+    /** Called from LauncherApp.onCreate (fire-and-forget) or first CardRepository.getAll() call. */
+    suspend fun installIfEmpty() = withContext(dispatchers.io) {
+        if (cardDao.count() == 0) {
+            cardDao.insertAll(SEED_CARDS.mapIndexed { idx, c -> c.toEntity(json, idx) })
         }
     }
 }
+
+// Card <-> entity mapping extension
+fun Card.toEntity(json: Json, seedOrder: Int) = CachedCardEntity(
+    id = id, title = title, description = description,
+    intent = intent.name, type = type.name,
+    icon = icon, actionLabel = actionLabel, whyLabel = whyLabel,
+    tagsJson = json.encodeToString(tags),
+    seedOrder = seedOrder
+)
 ```
 
-Called once from `MainActivity.onCreate` (after DI initialization, inside `lifecycleScope.launch`).
-
-### 4.8 Repository transactional contract (FR-10)
-
-`FeedbackRepositoryImpl.record(event, card)` wraps both writes (insert `feedback_events` + upsert N rows in `user_profile`) in `database.withTransaction { ... }` per FR-10. The formula `weightDelta = event.weight / card.tags.size` is applied per-tag.
+`CardRepositoryImpl.getAll()` calls `installer.installIfEmpty()` before its first emit so the flow is never empty on first boot.
 
 ---
 
 ## 5. Domain Models
 
-File layout under `data/model/` (domain-flavored models live here per AGENTS.md; they are not tied to Room).
+All domain models are **immutable** (`data class` or `enum` or `sealed class`/`object`), framework-agnostic, and serializable via `kotlinx.serialization` where needed.
 
 ### 5.1 `Intent.kt`
 
 ```kotlin
-enum class Intent(val displayName: String, val headerFormat: String) {
-    COMMUTE("通勤", "通勤模式 · %s"),
-    WORK   ("工作", "工作模式 · %s"),
-    LUNCH  ("午餐", "午餐时间 · %s"),
-    REST   ("休息", "休息时间 · %s");
-
-    companion object { val DEFAULT: Intent = WORK }  // FR-03 cold-start
-}
+enum class Intent { COMMUTE, WORK, LUNCH, REST }
 ```
+
+Default active intent on cold start = `Intent.WORK` (PRD FR-03).
 
 ### 5.2 `CardType.kt`
 
 ```kotlin
-enum class CardType { CONTINUE, DISCOVER, NEW, HERO }
+enum class CardType { HERO, CONTINUE, DISCOVER, NEW }
 ```
 
-> `HERO` is a **display role**, not a seed attribute. Seed cards are only CONTINUE/DISCOVER/NEW. At render time, `HomeViewModel` marks the top-ranked card as `displayType = HERO` in the UI state. This distinction lets the UI layer style the hero without the engine caring.
+> Note: `HERO` is kept in the enum for UI-layer categorization (which slot a given Card occupies) but is **not** used in the seed catalog — seed cards are only `CONTINUE`, `DISCOVER`, or `NEW`. The `HERO` slot is a rendering decision made by `HomeViewModel` based on `recommend()` output position 0.
 
-### 5.3 `SeedCard.kt` and `Card.kt`
+### 5.3 `Card.kt`
 
 ```kotlin
-data class SeedCard(
-    val id: String,
-    val title: String,
-    val description: String,
-    val intent: Intent,
-    val type: CardType,                // CONTINUE | DISCOVER | NEW
-    val icon: String,                  // emoji
-    val actionLabel: String,
-    val whyLabel: String,
-    val tags: List<String>
-)
-
+@Immutable
 data class Card(
-    val id: String,
-    val title: String,
-    val description: String,
-    val intent: Intent,
-    val type: CardType,                // seed type (CONTINUE | DISCOVER | NEW)
-    val displayType: CardType,         // HERO when shown in hero slot, else == type
-    val icon: String,
-    val actionLabel: String,
-    val whyLabel: String,
-    val tags: List<String>,
-    val seedOrder: Int                 // for deterministic tiebreak
+    val id:           String,
+    val intent:       Intent,
+    val type:         CardType,
+    val icon:         String,
+    val title:        String,
+    val description:  String,
+    val actionLabel:  String,
+    val whyLabel:     String,
+    val tags:         List<String>,
+    val seedOrder:    Int = 0
 )
 ```
 
-### 5.4 `Signal.kt` (sealed)
+The `@Immutable` annotation (from `androidx.compose.runtime`) marks the class as stable for Compose skippability.
+
+### 5.4 `Signal.kt`
+
+Sealed class — one subclass per signal type, all carrying `cardId` + `timestampMs` (FR-07 test-hook Clock).
 
 ```kotlin
 sealed class Signal {
-    abstract val cardId: String
-    abstract val intent: Intent
+    abstract val cardId:      String
+    abstract val timestampMs: Long
 
-    data class Tap        (override val cardId: String, override val intent: Intent) : Signal()
-    data class Dwell      (override val cardId: String, override val intent: Intent, val durationMs: Long) : Signal()
-    data class Like       (override val cardId: String, override val intent: Intent) : Signal()   // 👍
-    data class Dislike    (override val cardId: String, override val intent: Intent) : Signal()   // 👎
-    data class Dismiss    (override val cardId: String, override val intent: Intent) : Signal()   // ✕
-    data class ActionTapped(override val cardId: String, override val intent: Intent) : Signal()  // FR-08
-    data class IntentSwitch(override val cardId: String, override val intent: Intent, val fromIntent: Intent) : Signal()
-    data class RevealAppeared(override val cardId: String, override val intent: Intent) : Signal() // appearance start
+    data class Tap(            override val cardId: String, override val timestampMs: Long) : Signal()
+    data class Dwell(          override val cardId: String, override val timestampMs: Long, val durationMs: Long) : Signal()
+    data class Like(           override val cardId: String, override val timestampMs: Long) : Signal()
+    data class Dislike(        override val cardId: String, override val timestampMs: Long) : Signal()
+    data class Dismiss(        override val cardId: String, override val timestampMs: Long) : Signal()
+    data class ActionTapped(   override val cardId: String, override val timestampMs: Long) : Signal()
+    data class IntentSwitch(   override val cardId: String, override val timestampMs: Long, val to: Intent) : Signal()
+    data class RevealAppeared( override val cardId: String, override val timestampMs: Long) : Signal()
+
+    /** Maps each signal to its persisted type name + weight per PRD §3/FR-02/06/07/08. */
+    val persistedType: SignalType
+        get() = when (this) {
+            is Tap            -> SignalType.TAP
+            is Dwell          -> SignalType.DWELL
+            is Like           -> SignalType.THUMB_UP
+            is Dislike        -> SignalType.THUMB_DOWN
+            is Dismiss        -> SignalType.DISMISS
+            is ActionTapped   -> SignalType.ACTION_TAP
+            is IntentSwitch   -> SignalType.INTENT_SWITCH
+            is RevealAppeared -> SignalType.REVEAL
+        }
+
+    val weight: Float
+        get() = when (this) {
+            is Like         -> +3f
+            is ActionTapped -> +2f
+            is Dwell        -> +1f
+            is Tap          ->  0f
+            is RevealAppeared -> 0f
+            is IntentSwitch ->  0f
+            is Dismiss      -> -2f
+            is Dislike      -> -3f
+        }
 }
 
-/** Flat enum persisted to Room. */
-enum class SignalType(val weight: Float) {
-    TAP(+2f),
-    DWELL(+1f),
-    THUMB_UP(+3f),
-    THUMB_DOWN(-3f),
-    DISMISS(-2f),
-    ACTION_TAP(+2f),
-    INTENT_SWITCH(0f),    // bookkeeping, no profile effect
-    REVEAL_APPEARED(0f);  // bookkeeping, no profile effect
-}
-
-fun Signal.toType(): SignalType = when (this) {
-    is Signal.Tap            -> SignalType.TAP
-    is Signal.Dwell          -> SignalType.DWELL
-    is Signal.Like           -> SignalType.THUMB_UP
-    is Signal.Dislike        -> SignalType.THUMB_DOWN
-    is Signal.Dismiss        -> SignalType.DISMISS
-    is Signal.ActionTapped   -> SignalType.ACTION_TAP
-    is Signal.IntentSwitch   -> SignalType.INTENT_SWITCH
-    is Signal.RevealAppeared -> SignalType.REVEAL_APPEARED
-}
+enum class SignalType { TAP, DWELL, THUMB_UP, THUMB_DOWN, DISMISS, ACTION_TAP, INTENT_SWITCH, REVEAL }
 ```
 
-Only signals with non-zero weight update the profile (per FR-10). Zero-weight signals still persist to `feedback_events` so debug tooling (FR-20) can replay them.
+**Decision note (not explicit in PRD/DESIGN):** `Tap`, `IntentSwitch`, and `RevealAppeared` carry weight `0f`. They are persisted but do not modify the profile; they exist for instrumentation (FR-20 FLYWHEEL logcat) and future analytics. Only `Like/Dislike/ActionTapped/Dwell/Dismiss` have profile-modifying weight.
 
 ### 5.5 `UserProfile.kt`
 
+Snapshot used by the engine; derived from the DAO list.
+
 ```kotlin
+@Immutable
 data class UserProfile(
-    /** Tag → weight snapshot (positive or negative). */
-    val tagWeights: Map<String, Float>,
+    val weights:     Map<String, Float>,   // tag -> running weight
     val totalEvents: Int,
-    val updatedMs: Long
+    val updatedMs:   Long
 ) {
-    fun weightOf(tag: String): Float = tagWeights[tag] ?: 0f
+    fun weightOf(tag: String): Float = weights[tag] ?: 0f
 
     companion object {
-        val EMPTY = UserProfile(emptyMap(), 0, 0L)
+        val Empty = UserProfile(weights = emptyMap(), totalEvents = 0, updatedMs = 0L)
     }
 }
 ```
 
 ### 5.6 `ConfidenceLevel.kt`
 
+Used by `HomeUiState` / `ConfidenceBar` to convert an engine score into a visual level.
+
 ```kotlin
-enum class ConfidenceLevel { LOW, MEDIUM, HIGH;
+enum class ConfidenceLevel(val fraction: Float) {
+    LOW(0.35f), MED(0.65f), HIGH(0.92f);
+
     companion object {
-        /** Deterministic mapping from total event count. */
-        fun fromEventCount(n: Int): ConfidenceLevel = when {
-            n < 5  -> LOW
-            n < 20 -> MEDIUM
-            else   -> HIGH
+        fun from(score: Float, maxScore: Float): ConfidenceLevel {
+            if (maxScore <= 0f) return LOW
+            val f = (score / maxScore).coerceIn(0f, 1f)
+            return when {
+                f >= 0.75f -> HIGH
+                f >= 0.40f -> MED
+                else       -> LOW
+            }
         }
     }
 }
 ```
 
-Used by `Header` composable to render a badge next to the profile pill. Not referenced by the engine.
-
-### 5.7 `FeedbackEvent.kt` (domain mirror)
+### 5.7 `AppInfo.kt`
 
 ```kotlin
-data class FeedbackEvent(
-    val id: Long = 0L,
-    val cardId: String,
-    val intent: Intent,
-    val signalType: SignalType,
-    val weight: Float,
-    val timestampMs: Long
+@Immutable
+data class AppInfo(
+    val packageName: String,
+    val label:       String,
+    val iconKey:     String   // stable key; actual Drawable fetched at render via PackageManager
 )
 ```
-
-Repositories accept `FeedbackEvent` (domain) and convert to `FeedbackEventEntity` internally.
 
 ---
 
 ## 6. Repository Interfaces
 
-All three live under `data/repo/`. Implementations are `@Singleton`; interfaces bound in `RepositoryModule`.
+All repositories live in `data/repo/`. Implementations in `data/repo/impl/` bound via Hilt `@Binds`.
 
 ### 6.1 `FeedbackRepository`
 
 ```kotlin
 interface FeedbackRepository {
-    /** True if Room is open and writable; false forces FR-19 graceful-degrade. */
+
+    /** Health flag consulted by HomeViewModel (FR-09 / FR-19 Room-unavailable). */
     val isHealthy: StateFlow<Boolean>
 
+    /** Running total count (live). Used by Profile v47 header. */
+    fun observeCount(): Flow<Int>
+
+    /** Full event log stream (debug / FR-20 dump). */
+    fun observeEvents(): Flow<List<FeedbackEventEntity>>
+
     /**
-     * Persists a feedback event AND updates user_profile in the same transaction (FR-10).
-     * Applies 400ms same-(cardId, signalType) debounce per FR-02.
-     * Uses injected Clock for timestamps (FR-07 test hook).
-     * Returns the stored event id, or null when debounced/unhealthy.
+     * Persists a Signal atomically with the associated UserProfile deltas.
+     * Implements FR-10 formula: for each tag in card.tags, weight += signal.weight / card.tags.size.
+     * Wrapped in a single Room transaction.
+     *
+     * @return the inserted row id, or null if Room is unhealthy (write was skipped).
      */
     suspend fun record(signal: Signal, card: Card): Long?
 
-    suspend fun count(): Int
-    fun countFlow(): Flow<Int>
-    suspend fun getAll(): List<FeedbackEvent>
-
-    /** Clears feedback_events AND user_profile atomically (FR-12 reset). */
+    /** FR-12 reset: DELETE from feedback_events + user_profile in one txn. */
     suspend fun clearAll()
 }
 ```
@@ -838,13 +927,15 @@ interface FeedbackRepository {
 
 ```kotlin
 interface CardRepository {
-    /** All 16 seed cards in declaration order (FR-16). In-memory backed. */
-    suspend fun getAll(): List<Card>
 
-    /** Cards for one intent, ordered by seed_order ASC. */
-    suspend fun getForIntent(intent: Intent): List<Card>
+    /** Seed-installer-gated; first call triggers SeedInstaller.installIfEmpty(). */
+    fun observeAll(): Flow<List<Card>>
 
-    suspend fun getById(id: String): Card?
+    fun observeByIntent(intent: Intent): Flow<List<Card>>
+
+    suspend fun byIntent(intent: Intent): List<Card>
+
+    suspend fun all(): List<Card>
 }
 ```
 
@@ -852,12 +943,22 @@ interface CardRepository {
 
 ```kotlin
 interface ProfileRepository {
+
+    fun observeProfile(): Flow<UserProfile>
+
+    fun observeTopTags(limit: Int = 10): Flow<List<UserProfileEntry>>
+
     suspend fun snapshot(): UserProfile
-    fun observe(): Flow<UserProfile>
-    suspend fun topTags(n: Int = 10): List<Pair<String, Float>>
-    /** Used internally by FeedbackRepositoryImpl.record. */
-    suspend fun applyDelta(tag: String, delta: Float, nowMs: Long)
-    suspend fun reset()
+}
+```
+
+### 6.4 `PackageAppsRepository`
+
+```kotlin
+interface PackageAppsRepository {
+    suspend fun launchableApps(): List<AppInfo>
+    suspend fun loadIcon(packageName: String): android.graphics.drawable.Drawable?
+    suspend fun launchIntentFor(packageName: String): android.content.Intent?
 }
 ```
 
@@ -865,296 +966,357 @@ interface ProfileRepository {
 
 ## 7. RecommendationEngine
 
-File: `domain/recommend/RecommendationEngine.kt`
+Pure Kotlin, injected `Clock` + `Random`, deterministic in tests. Implements FR-11 exactly.
+
+### 7.1 Interface
 
 ```kotlin
+package com.bobpan.ailauncher.domain.recommend
+
 interface RecommendationEngine {
+
     /**
-     * Returns up to [count] cards for [intent], composed via FR-11's fixed-slot ε-greedy:
-     *   - 1 exploration slot when availableCards.size >= 2
-     *   - remainder are top-scored exploitation picks
-     *   - exploitation ordering: score DESC, tiebreak = seedOrder ASC
-     *   - exploration slot placed at position (available.size - 1)
-     *
-     * Purely synchronous and stateless; caller provides all inputs.
+     * @param intent          active intent
+     * @param profile         snapshot (empty on cold start)
+     * @param catalog         full seed catalog
+     * @param dismissed       in-memory dismiss set for this intent
+     * @param count           how many slots to fill (v0.1 always 4)
+     * @return ordered list (≤ count), position 0 is Hero source per FR-11.
      */
     fun recommend(
-        intent: Intent,
-        count: Int,
-        availableCards: List<Card>,            // already filtered by intent & dismiss list
-        profile: UserProfile
-    ): List<Card>
+        intent:    Intent,
+        profile:   UserProfile,
+        catalog:   List<Card>,
+        dismissed: Set<String>,
+        count:     Int = 4
+    ): RecommendationResult
 
-    /** FR-20 debug hook (no-op in release). */
+    /**
+     * DEBUG-only hook (FR-20). Release builds: no-op or throws IllegalStateException.
+     */
     fun setDeterministicMode(seed: Long)
 }
+
+@Immutable
+data class RecommendationResult(
+    val ordered:   List<Card>,
+    val scores:    Map<String, Float>,   // card.id -> exploitation score (for ConfidenceBar)
+    val maxScore:  Float
+)
 ```
 
-File: `domain/recommend/EpsilonGreedyEngine.kt`
+### 7.2 Implementation — `EpsilonGreedyEngine`
 
 ```kotlin
-@Singleton
 class EpsilonGreedyEngine @Inject constructor(
-    @Named("recEngineRng") private val rngProvider: Provider<Random>,
+    @Named("recEngineRng") private val rngProvider: () -> Random,
     private val clock: Clock
 ) : RecommendationEngine {
 
-    @Volatile private var overrideRng: Random? = null
+    @Volatile
+    private var overrideRng: Random? = null
 
-    override fun setDeterministicMode(seed: Long) {
-        if (BuildConfig.DEBUG) overrideRng = Random(seed)
-    }
-
-    private fun rng(): Random = overrideRng ?: rngProvider.get()
-
-    /** score(c, P) = Σ (1.0 × P.weight[tag]) for tag in c.tags  (FR-11) */
-    internal fun score(card: Card, profile: UserProfile): Float =
-        card.tags.fold(0f) { acc, tag -> acc + profile.weightOf(tag) }
+    private fun rng(): Random = overrideRng ?: rngProvider()
 
     override fun recommend(
         intent: Intent,
-        count: Int,
-        availableCards: List<Card>,
-        profile: UserProfile
-    ): List<Card> {
-        if (availableCards.isEmpty()) return emptyList()
-        if (availableCards.size == 1) return availableCards.take(count)
+        profile: UserProfile,
+        catalog: List<Card>,
+        dismissed: Set<String>,
+        count: Int
+    ): RecommendationResult {
+        val available = catalog
+            .asSequence()
+            .filter { it.intent == intent && it.id !in dismissed }
+            .sortedBy { it.seedOrder }   // stable tiebreak
+            .toList()
 
-        // Exploitation pool: all-but-one, sorted by score desc, then seedOrder asc
-        val sorted = availableCards.sortedWith(
-            compareByDescending<Card> { score(it, profile) }
-                .thenBy { it.seedOrder }
-        )
-        val exploitationCount = (availableCards.size - 1)
-        val exploitation = sorted.take(exploitationCount)
-        val explorationPool = availableCards - exploitation.toSet()
-        val exploration = explorationPool[rng().nextInt(explorationPool.size)]
-
-        // Place exploration at bottom (position = available.size - 1)
-        val composed = buildList {
-            addAll(exploitation)            // positions 0 .. size-2
-            add(exploration)                // position size-1
+        if (available.isEmpty()) {
+            return RecommendationResult(emptyList(), emptyMap(), 0f)
         }
-        return composed.take(count)
+
+        // Scoring — FR-11: score(c,P) = Σ P.weight[tag] for tag in c.tags, card-side weight = 1.0.
+        val scored: List<Pair<Card, Float>> = available.map { card ->
+            val s = card.tags.sumOf { tag -> profile.weightOf(tag).toDouble() }.toFloat()
+            card to s
+        }
+
+        // Stable sort: by score DESC, then by seedOrder ASC (already in available order).
+        val sortedExploit = scored
+            .withIndex()
+            .sortedWith(
+                compareByDescending<IndexedValue<Pair<Card, Float>>> { it.value.second }
+                    .thenBy { it.index }   // preserve seed order on ties
+            )
+            .map { it.value }
+
+        // Single-candidate case: no room for exploration.
+        if (available.size <= 1) {
+            val ordered = sortedExploit.map { it.first }.take(count)
+            return RecommendationResult(
+                ordered = ordered,
+                scores  = ordered.associate { it.id to scored.first { s -> s.first.id == it.id }.second },
+                maxScore = sortedExploit.firstOrNull()?.second ?: 0f
+            )
+        }
+
+        // FR-11 slot allocation: reserve exactly 1 exploration slot, remainder exploitation.
+        val exploitCount = available.size - 1
+        val exploit      = sortedExploit.take(exploitCount).map { it.first }
+        val explorePool  = available - exploit.toSet()
+        val exploreChoice = if (explorePool.isNotEmpty()) {
+            explorePool[rng().nextInt(explorePool.size)]
+        } else null
+
+        // Placement: top exploit at position 0, remaining exploit in score order,
+        // exploration inserted at position available.size - 1 (the bottom).
+        val ordered = buildList {
+            addAll(exploit)
+            exploreChoice?.let { add(it) }
+        }.take(count)
+
+        val maxScore = sortedExploit.firstOrNull()?.second ?: 0f
+
+        return RecommendationResult(
+            ordered  = ordered,
+            scores   = scored.associate { it.first.id to it.second },
+            maxScore = maxScore
+        )
+    }
+
+    override fun setDeterministicMode(seed: Long) {
+        if (!BuildConfig.DEBUG) {
+            // silently ignore in release; FR-20 is debug-only
+            return
+        }
+        overrideRng = Random(seed)
     }
 }
 ```
 
-Notes for the dev agent:
-
-- `Provider<Random>` lets tests swap the binding per run; the `overrideRng` gate is a separate path required only by FR-20's runtime `setDeterministicMode`.
-- Dismissed cards are filtered **outside** the engine (by `HomeViewModel`), per FR-11 "The dismiss-list is passed in as a parameter by the caller".
-- Engine has no knowledge of the Hero role; `HomeViewModel` tags position 0 as `displayType = HERO` before emitting UI state.
-- `Clock` is injected even though the engine doesn't currently use wall-time — reserved for future exploration-decay logic and to mirror the FR-07 test-hook convention.
+**Test mode.** `DomainModule` provides `@Named("recEngineRng")` as `Random.Default` in production and `Random(42L)` in test `@TestInstallIn` overrides (see §12). `Clock` is injected to ensure FR-07 dwell logic is deterministic; the engine itself does not consult the clock for FR-11 decisions (pure function of inputs), but `Clock.now()` is wired through so downstream consumers (repo `timestamp_ms`) use the same source.
 
 ---
 
 ## 8. ViewModel Layer
 
-All three ViewModels are `@HiltViewModel`, expose `val uiState: StateFlow<…>`, and handle events via named methods (no Compose events lifted through sealed `Intent`-style sum types for v0.1 — too much ceremony for 3 VMs).
+All view models use `StateFlow<*UiState>` exposed as `val uiState: StateFlow<...>`, with input methods for user actions. **All `UiState` types are sealed interfaces with `@Immutable` data class variants** so Compose skippability is preserved.
 
-### 8.1 `HomeViewModel`
+### 8.1 `HomeUiState`
 
-File: `ui/home/HomeViewModel.kt`
+```kotlin
+// ui/home/HomeUiState.kt
+sealed interface HomeUiState {
+    data object Loading : HomeUiState
+
+    @Immutable
+    data class Content(
+        val selectedIntent:    Intent,
+        val heroCard:          Card?,
+        val discoverCards:     List<Card>,
+        val scores:            Map<String, Float>,
+        val maxScore:          Float,
+        val showDefaultBanner: Boolean,
+        val storageHealthy:    Boolean,
+        val allDismissed:      Boolean,
+        val feedbackCounter:   Int
+    ) : HomeUiState
+
+    data class Error(val message: String) : HomeUiState
+}
+```
+
+### 8.2 `HomeViewModel`
 
 ```kotlin
 @HiltViewModel
 class HomeViewModel @Inject constructor(
-    private val cardRepo: CardRepository,
-    private val feedbackRepo: FeedbackRepository,
-    private val profileRepo: ProfileRepository,
-    private val engine: RecommendationEngine,
-    private val clock: Clock
+    private val cardRepository:      CardRepository,
+    private val feedbackRepository:  FeedbackRepository,
+    private val profileRepository:   ProfileRepository,
+    private val engine:              RecommendationEngine,
+    private val clock:               Clock,
+    private val dispatchers:         AppDispatchers,
+    savedState:                      SavedStateHandle
 ) : ViewModel() {
 
-    private val _uiState = MutableStateFlow<HomeUiState>(HomeUiState.Loading)
-    val uiState: StateFlow<HomeUiState> = _uiState.asStateFlow()
+    // --- Inputs (explicit state flows combined into uiState) ---
+    private val _selectedIntent       = MutableStateFlow(Intent.WORK)                // FR-03 cold-start
+    private val _dismissedByIntent    = MutableStateFlow<Map<Intent, Set<String>>>(emptyMap())
+    private val _bannerDismissed      = MutableStateFlow(false)
+    private val _showDefaultBanner    = MutableStateFlow(false)                      // set by MainActivity
+    val profileSheetOpen: MutableStateFlow<Boolean> = MutableStateFlow(false)
 
-    /** In-memory dismiss session per FR-06 (intent → Set<cardId>). */
-    private val dismissed: MutableMap<Intent, MutableSet<String>> =
-        Intent.values().associateWith { mutableSetOf<String>() }.toMutableMap()
+    // --- Output ---
+    val uiState: StateFlow<HomeUiState> = combine(
+        _selectedIntent,
+        _dismissedByIntent,
+        cardRepository.observeAll(),
+        profileRepository.observeProfile(),
+        feedbackRepository.observeCount(),
+        feedbackRepository.isHealthy,
+        _showDefaultBanner,
+        _bannerDismissed
+    ) { values ->
+        // destructure 8 values via index access
+        val intent     = values[0] as Intent
+        val dismissMap = values[1] as Map<Intent, Set<String>>
+        val catalog    = values[2] as List<Card>
+        val profile    = values[3] as UserProfile
+        val count      = values[4] as Int
+        val healthy    = values[5] as Boolean
+        val show       = values[6] as Boolean
+        val bannerDn   = values[7] as Boolean
 
-    private var activeIntent: Intent = Intent.DEFAULT
-    private var lastIntentSwitchMs: Long = 0L                        // FR-04 rapid-switch
+        val dismissed = dismissMap[intent].orEmpty()
+        val result    = engine.recommend(intent, profile, catalog, dismissed, count = 4)
 
-    fun start() { /* load cards, observe profile, emit initial state */ }
-    fun onIntentSelected(intent: Intent)
-    fun onSignal(signal: Signal, card: Card)                         // routes to repo + refresh
-    fun onDismiss(card: Card)                                        // hides + records DISMISS
-    fun onRestoreDismissed()                                         // FR-19 "恢复本模式"
-    fun onActionTapped(card: Card)                                   // FR-08
-    fun onHomeButtonPressed()                                        // FR-14 canonical state
-    fun refresh()                                                    // FR-12 post-reset re-render
-    /** Called by DwellTracker; FR-07 filters apply here. */
-    fun onCardAppearanceStarted(cardId: String)
-    fun onCardAppearanceEnded(cardId: String, dwellMs: Long)
-}
-```
+        HomeUiState.Content(
+            selectedIntent    = intent,
+            heroCard          = result.ordered.firstOrNull(),
+            discoverCards     = result.ordered.drop(1),
+            scores            = result.scores,
+            maxScore          = result.maxScore,
+            showDefaultBanner = show && !bannerDn,
+            storageHealthy    = healthy,
+            allDismissed      = dismissed.size >= 4 && catalog.any { it.intent == intent },
+            feedbackCounter   = count
+        )
+    }.stateIn(
+        scope = viewModelScope,
+        started = SharingStarted.WhileSubscribed(5_000),
+        initialValue = HomeUiState.Loading
+    )
 
-**`HomeUiState`** (`ui/home/HomeUiState.kt`):
+    // --- Actions ---
+    fun selectIntent(intent: Intent) {
+        if (_selectedIntent.value == intent) return
+        // FR-06 (b): re-entering intent clears its dismiss list
+        _dismissedByIntent.update { it - intent }
+        _selectedIntent.value = intent
+    }
 
-```kotlin
-sealed class HomeUiState {
-    data object Loading : HomeUiState()
-    data class Ready(
-        val activeIntent: Intent,
-        val headerText: String,                      // "工作模式 · 14:22"
-        val showDefaultLauncherBanner: Boolean,      // FR-17
-        val hero: Card?,                             // null only in EmptyAllDismissed
-        val discover: List<Card>,                    // 0..3
-        val confidence: ConfidenceLevel,
-        val emptyState: EmptyState = EmptyState.None
-    ) : HomeUiState()
-    data class Degraded(val reason: DegradeReason) : HomeUiState()   // FR-19 Room unavailable
-}
+    fun submitFeedback(card: Card, signal: Signal) {
+        viewModelScope.launch(dispatchers.io) {
+            feedbackRepository.record(signal, card)
+        }
+    }
 
-enum class EmptyState { None, AllDismissedForIntent }
-enum class DegradeReason { RoomUnavailable }
-```
+    fun dismissCard(card: Card) {
+        val now = clock.nowMs()
+        submitFeedback(card, Signal.Dismiss(card.id, now))
+        _dismissedByIntent.update { map ->
+            val current = map[card.intent].orEmpty()
+            map + (card.intent to (current + card.id))
+        }
+    }
 
-### 8.2 `AppDrawerViewModel`
+    fun trackDwell(card: Card, durationMs: Long) {
+        if (durationMs < 2_000L) return                 // FR-07 threshold
+        submitFeedback(card, Signal.Dwell(card.id, clock.nowMs(), durationMs))
+    }
 
-File: `ui/drawer/AppDrawerViewModel.kt`
+    fun restoreDismissedForActiveIntent() {
+        _dismissedByIntent.update { it - _selectedIntent.value }
+    }
 
-```kotlin
-@HiltViewModel
-class AppDrawerViewModel @Inject constructor(
-    @ApplicationContext private val appContext: Context,
-    @Named("ioDispatcher") private val io: CoroutineDispatcher
-) : ViewModel() {
+    fun setBannerVisibility(show: Boolean) { _showDefaultBanner.value = show }
+    fun dismissBanner()                    { _bannerDismissed.value = true }
 
-    private val _uiState = MutableStateFlow<AppDrawerUiState>(AppDrawerUiState.Loading)
-    val uiState: StateFlow<AppDrawerUiState> = _uiState.asStateFlow()
+    fun onHomeButtonPressed() {
+        // FR-14 canonical state
+        profileSheetOpen.value = false
+        // nav-level pop happens in MainActivity; scroll-to-top is owned by HomeScreen state
+    }
 
-    fun refresh()                                  // called onStart of screen
-    fun onAppTapped(item: AppDrawerItem): LaunchResult
-}
-
-data class AppDrawerItem(
-    val packageName: String,
-    val label: String,
-    val iconDrawable: Drawable
-)
-
-sealed class AppDrawerUiState {
-    data object Loading : AppDrawerUiState()
-    data class Ready(val apps: List<AppDrawerItem>) : AppDrawerUiState()
-    data object Empty : AppDrawerUiState()
-}
-
-sealed class LaunchResult {
-    data object Success : LaunchResult()
-    data class Failure(val reason: String) : LaunchResult()   // triggers Snackbar
-}
-```
-
-### 8.3 `ProfileDebugViewModel`
-
-File: `ui/profile/ProfileDebugViewModel.kt`
-
-```kotlin
-@HiltViewModel
-class ProfileDebugViewModel @Inject constructor(
-    private val profileRepo: ProfileRepository,
-    private val feedbackRepo: FeedbackRepository
-) : ViewModel() {
-
-    private val _uiState = MutableStateFlow<ProfileDebugUiState>(ProfileDebugUiState.Loading)
-    val uiState: StateFlow<ProfileDebugUiState> = _uiState.asStateFlow()
-
-    fun load()
-    fun onResetConfirmed()                           // FR-12 4-step reset
-    fun onSeedDemoProfile()                          // FR-20 debug only
-    fun onDumpProfile()                              // FR-20 debug only
-}
-
-sealed class ProfileDebugUiState {
-    data object Loading : ProfileDebugUiState()
-    data class Ready(
-        val topTags: List<TagWeight>,                // size ≤ 10
-        val totalEvents: Int,
-        val confidence: ConfidenceLevel
-    ) : ProfileDebugUiState()
-}
-
-data class TagWeight(val tag: String, val weight: Float)
-```
-
-The reset flow (FR-12) emits a side-effect callback to `HomeViewModel.refresh()` via a shared event bus OR via the Compose-level `onResetSuccess: () -> Unit` parameter. Architecture choice: **callback lambda** (simpler, no extra class).
-
----
-
-## 9. Hilt DI Graph
-
-Application: `AiLauncherApp` annotated `@HiltAndroidApp`.
-`MainActivity` annotated `@AndroidEntryPoint`.
-All three ViewModels annotated `@HiltViewModel` (shown in §8).
-
-### 9.1 `DatabaseModule`
-
-File: `di/DatabaseModule.kt`
-
-```kotlin
-@Module
-@InstallIn(SingletonComponent::class)
-object DatabaseModule {
-
-    @Provides @Singleton
-    fun provideDatabase(@ApplicationContext ctx: Context): AppDatabase =
-        Room.databaseBuilder(ctx, AppDatabase::class.java, AppDatabase.NAME)
-            .fallbackToDestructiveMigration()
-            .fallbackToDestructiveMigrationOnDowngrade()
-            .build()
-
-    @Provides fun provideFeedbackDao(db: AppDatabase): FeedbackDao = db.feedbackDao()
-    @Provides fun provideUserProfileDao(db: AppDatabase): UserProfileDao = db.userProfileDao()
-    @Provides fun provideCachedCardDao(db: AppDatabase): CachedCardDao = db.cachedCardDao()
-
-    @Provides @Singleton
-    fun provideJson(): Json = Json { ignoreUnknownKeys = true; prettyPrint = false }
-}
-```
-
-### 9.2 `RepositoryModule`
-
-File: `di/RepositoryModule.kt`
-
-```kotlin
-@Module
-@InstallIn(SingletonComponent::class)
-abstract class RepositoryModule {
-    @Binds @Singleton
-    abstract fun bindFeedbackRepo(impl: FeedbackRepositoryImpl): FeedbackRepository
-
-    @Binds @Singleton
-    abstract fun bindCardRepo(impl: CardRepositoryImpl): CardRepository
-
-    @Binds @Singleton
-    abstract fun bindProfileRepo(impl: ProfileRepositoryImpl): ProfileRepository
-}
-```
-
-### 9.3 `DomainModule`
-
-File: `di/DomainModule.kt`
-
-```kotlin
-@Module
-@InstallIn(SingletonComponent::class)
-abstract class DomainModule {
-    @Binds @Singleton
-    abstract fun bindEngine(impl: EpsilonGreedyEngine): RecommendationEngine
-
-    companion object {
-        @Provides @Singleton @Named("recEngineRng")
-        fun provideRng(): Random = Random.Default        // test replaces with Random(42L)
+    fun refresh() {
+        // triggered on Profile reset (FR-12) — flows re-emit automatically; method is a hook
+        // for UI-level side effects (scroll-to-top, collapse sheet).
+        profileSheetOpen.value = false
     }
 }
 ```
 
-### 9.4 `AppModule`
+### 8.3 `AppDrawerViewModel`
 
-File: `di/AppModule.kt`
+```kotlin
+sealed interface DrawerUiState {
+    data object Loading : DrawerUiState
+    @Immutable data class Content(val apps: List<AppInfo>) : DrawerUiState
+    data object Empty : DrawerUiState
+    data class Error(val message: String) : DrawerUiState
+}
+
+@HiltViewModel
+class AppDrawerViewModel @Inject constructor(
+    private val packageApps: PackageAppsRepository,
+    private val dispatchers: AppDispatchers
+) : ViewModel() {
+
+    private val _uiState = MutableStateFlow<DrawerUiState>(DrawerUiState.Loading)
+    val uiState: StateFlow<DrawerUiState> = _uiState.asStateFlow()
+
+    init { reload() }
+
+    fun reload() {
+        viewModelScope.launch(dispatchers.io) {
+            _uiState.value = DrawerUiState.Loading
+            _uiState.value = runCatching { packageApps.launchableApps() }
+                .map { apps -> if (apps.isEmpty()) DrawerUiState.Empty else DrawerUiState.Content(apps) }
+                .getOrElse { t -> DrawerUiState.Error(t.message ?: "unknown") }
+        }
+    }
+
+    suspend fun launchIntentFor(pkg: String) = packageApps.launchIntentFor(pkg)
+}
+```
+
+### 8.4 `ProfileDebugViewModel`
+
+```kotlin
+sealed interface ProfileSheetState {
+    data object Loading : ProfileSheetState
+    @Immutable data class Loaded(
+        val topTags: List<UserProfileEntry>,
+        val counter: Int
+    ) : ProfileSheetState
+    data object Empty : ProfileSheetState
+}
+
+@HiltViewModel
+class ProfileDebugViewModel @Inject constructor(
+    private val profileRepository:  ProfileRepository,
+    private val feedbackRepository: FeedbackRepository,
+    private val dispatchers:        AppDispatchers
+) : ViewModel() {
+
+    val uiState: StateFlow<ProfileSheetState> =
+        combine(
+            profileRepository.observeTopTags(limit = 10),
+            feedbackRepository.observeCount()
+        ) { tags, count ->
+            if (count == 0 && tags.isEmpty()) ProfileSheetState.Empty
+            else ProfileSheetState.Loaded(tags, count)
+        }.stateIn(
+            scope = viewModelScope,
+            started = SharingStarted.WhileSubscribed(5_000),
+            initialValue = ProfileSheetState.Loading
+        )
+
+    fun resetProfile(onDone: () -> Unit) {
+        viewModelScope.launch(dispatchers.io) {
+            feedbackRepository.clearAll()
+            withContext(dispatchers.main) { onDone() }
+        }
+    }
+}
+```
+
+---
+
+## 9. Hilt Dependency Injection
+
+### 9.1 `AppModule`
 
 ```kotlin
 @Module
@@ -1162,108 +1324,190 @@ File: `di/AppModule.kt`
 object AppModule {
 
     @Provides @Singleton
-    fun provideClock(): Clock = SystemClock
+    fun provideClock(): Clock = Clock.System
 
-    @Provides @Singleton @Named("ioDispatcher")
-    fun provideIoDispatcher(): CoroutineDispatcher = Dispatchers.IO
+    @Provides @Singleton
+    fun provideDispatchers(): AppDispatchers = AppDispatchers.Default
 
-    @Provides @Singleton @Named("defaultDispatcher")
-    fun provideDefaultDispatcher(): CoroutineDispatcher = Dispatchers.Default
+    @Provides @Singleton
+    fun provideJson(): Json = Json {
+        ignoreUnknownKeys = true
+        encodeDefaults    = true
+    }
+}
 
-    @Provides @Singleton @Named("mainDispatcher")
-    fun provideMainDispatcher(): CoroutineDispatcher = Dispatchers.Main.immediate
+// util/Dispatchers.kt
+data class AppDispatchers(
+    val main:    CoroutineDispatcher,
+    val io:      CoroutineDispatcher,
+    val default: CoroutineDispatcher
+) {
+    companion object {
+        val Default = AppDispatchers(
+            main    = Dispatchers.Main.immediate,
+            io      = Dispatchers.IO,
+            default = Dispatchers.Default
+        )
+    }
+}
+
+// util/Clock.kt
+interface Clock {
+    fun nowMs(): Long
+    object System : Clock { override fun nowMs() = java.lang.System.currentTimeMillis() }
 }
 ```
 
-**Full binding summary (DI dependency table):**
+### 9.2 `DatabaseModule`
 
-| Interface / qualifier            | Impl                       | Scope     |
-|----------------------------------|----------------------------|-----------|
-| `AppDatabase`                    | Room-generated             | Singleton |
-| `FeedbackDao` / `UserProfileDao` / `CachedCardDao` | Room-generated | Unscoped (via DB) |
-| `Json`                           | `Json { }`                 | Singleton |
-| `FeedbackRepository`             | `FeedbackRepositoryImpl`   | Singleton |
-| `CardRepository`                 | `CardRepositoryImpl`       | Singleton |
-| `ProfileRepository`              | `ProfileRepositoryImpl`    | Singleton |
-| `RecommendationEngine`           | `EpsilonGreedyEngine`      | Singleton |
-| `@Named("recEngineRng") Random`  | `Random.Default`           | Singleton |
-| `Clock`                          | `SystemClock`              | Singleton |
-| `@Named("ioDispatcher") CoroutineDispatcher` | `Dispatchers.IO` | Singleton |
-| `@Named("defaultDispatcher") CoroutineDispatcher` | `Dispatchers.Default` | Singleton |
-| `@Named("mainDispatcher") CoroutineDispatcher`  | `Dispatchers.Main.immediate` | Singleton |
-| `SeedLoader`                     | itself (constructor-inject)| Singleton |
+```kotlin
+@Module
+@InstallIn(SingletonComponent::class)
+object DatabaseModule {
+
+    @Provides @Singleton
+    fun provideDatabase(
+        @ApplicationContext ctx: Context,
+        json: Json
+    ): LauncherDatabase =
+        Room.databaseBuilder(ctx, LauncherDatabase::class.java, LauncherDatabase.NAME)
+            .addTypeConverter(Converters(json))
+            .fallbackToDestructiveMigration()              // FR-09
+            .build()
+
+    @Provides fun provideFeedbackDao(db: LauncherDatabase): FeedbackDao    = db.feedbackDao()
+    @Provides fun provideProfileDao (db: LauncherDatabase): UserProfileDao = db.userProfileDao()
+    @Provides fun provideCardDao    (db: LauncherDatabase): CardDao        = db.cardDao()
+}
+```
+
+### 9.3 `RepositoryModule`
+
+```kotlin
+@Module
+@InstallIn(SingletonComponent::class)
+abstract class RepositoryModule {
+    @Binds @Singleton abstract fun bindFeedback(impl: FeedbackRepositoryImpl): FeedbackRepository
+    @Binds @Singleton abstract fun bindCards   (impl: CardRepositoryImpl):     CardRepository
+    @Binds @Singleton abstract fun bindProfile (impl: ProfileRepositoryImpl):  ProfileRepository
+    @Binds @Singleton abstract fun bindApps    (impl: PackageAppsRepositoryImpl): PackageAppsRepository
+}
+```
+
+### 9.4 `DomainModule`
+
+```kotlin
+@Qualifier @Retention(AnnotationRetention.BINARY)
+annotation class RecEngineRng
+
+@Module
+@InstallIn(SingletonComponent::class)
+object DomainModule {
+
+    /**
+     * Provider-qualified RNG factory. Production: Random.Default.
+     * Tests override via @TestInstallIn with Random(42L).
+     * Declared as () -> Random so EpsilonGreedyEngine can re-read the provider
+     * after setDeterministicMode() fires (FR-20 demo hook).
+     */
+    @Provides @Singleton @Named("recEngineRng")
+    fun provideRecEngineRng(): () -> Random = { Random.Default }
+
+    @Provides @Singleton
+    fun provideRecommendationEngine(
+        @Named("recEngineRng") rng: () -> Random,
+        clock: Clock
+    ): RecommendationEngine = EpsilonGreedyEngine(rng, clock)
+}
+```
+
+> `@Named("recEngineRng")` is used per PRD FR-11 verbatim ("provided by Hilt as `@Singleton @Named("recEngineRng") Random`"). If the dev agent prefers a typed qualifier, `@RecEngineRng` is declared above and either may be used — pick one and stay consistent.
+
+### 9.5 Application class
+
+```kotlin
+@HiltAndroidApp
+class LauncherApp : Application() {
+    @Inject lateinit var seedInstaller: SeedInstaller
+
+    override fun onCreate() {
+        super.onCreate()
+        // Fire-and-forget seed install on a background coroutine.
+        CoroutineScope(Dispatchers.IO + SupervisorJob()).launch {
+            seedInstaller.installIfEmpty()
+        }
+    }
+}
+```
 
 ---
 
 ## 10. Navigation
 
-Single activity (`MainActivity`) → single `NavHost` with two destinations.
-
-File: `ui/nav/Routes.kt`
+Single `NavHost` with two destinations. `profile_debug` is **not** a route — it is an in-composition `ModalBottomSheet` controlled by `HomeViewModel.profileSheetOpen`.
 
 ```kotlin
+// ui/nav/LauncherNavHost.kt
 object Routes {
-    const val HOME = "home"
+    const val HOME   = "home"
     const val DRAWER = "drawer"
+    // "profile_debug" — not a nav route, documented here for clarity:
+    const val PROFILE_DEBUG_ANCHOR = "profile_debug"   // used only as analytics key
 }
-```
 
-File: `ui/nav/NavGraph.kt`
-
-```kotlin
 @Composable
-fun AiLauncherNavGraph(
+fun LauncherNavHost(
     navController: NavHostController,
     modifier: Modifier = Modifier
 ) {
     NavHost(
-        navController = navController,
+        navController    = navController,
         startDestination = Routes.HOME,
-        modifier = modifier
+        modifier         = modifier
     ) {
         composable(Routes.HOME) {
+            val vm: HomeViewModel = hiltViewModel()
             HomeScreen(
-                onOpenDrawer = { navController.navigate(Routes.DRAWER) }
+                viewModel        = vm,
+                onOpenDrawer     = { navController.navigate(Routes.DRAWER) }
             )
         }
         composable(Routes.DRAWER) {
+            val vm: AppDrawerViewModel = hiltViewModel()
             AppDrawerScreen(
-                onBack = { navController.popBackStack() }
+                viewModel = vm,
+                onBack    = { navController.popBackStack(Routes.HOME, inclusive = false) }
             )
         }
     }
 }
 ```
 
-`MainActivity.setContent { AiLauncherTheme { AiLauncherNavGraph(rememberNavController()) } }`.
-
-Home-button re-entry (FR-14) is implemented in `MainActivity.onNewIntent`:
+`MainActivity.onNewIntent` (for Home-button press while foreground, FR-14) calls:
 
 ```kotlin
 override fun onNewIntent(intent: android.content.Intent) {
     super.onNewIntent(intent)
-    if (intent.action == android.content.Intent.ACTION_MAIN &&
-        intent.categories?.contains(android.content.Intent.CATEGORY_HOME) == true) {
-        navController.popBackStack(Routes.HOME, inclusive = false)
-        homeViewModel.onHomeButtonPressed()   // dismiss sheet, scroll to top, preserve intent
-    }
+    // FR-14 canonical state (see HomeViewModel.onHomeButtonPressed())
+    navController.popBackStack(Routes.HOME, inclusive = false)
+    homeViewModel.onHomeButtonPressed()
+    // Scroll-to-top is handled in HomeScreen via a LaunchedEffect keyed off a trip-counter StateFlow.
 }
 ```
-
-Bottom sheets (Profile v47) are **not** navigation destinations — they are Compose `ModalBottomSheet` controlled by a `rememberSaveable` state in `HomeScreen`. Dismissed via `HomeViewModel.onHomeButtonPressed()`.
 
 ---
 
 ## 11. AndroidManifest.xml
 
-File: `app/src/main/AndroidManifest.xml`
-
 ```xml
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
-    xmlns:tools="http://schemas.android.com/tools">
+          xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- FR-13: Android 11+ package visibility for querying launchable apps -->
+    <!-- NFR-06 / NFR-04: NO network permissions declared.
+         Do NOT add <uses-permission android:name="android.permission.INTERNET" />. -->
+
+    <!-- Android 11+ (API 30) PackageManager visibility for the app drawer. FR-13 / SM-08. -->
     <queries>
         <intent>
             <action android:name="android.intent.action.MAIN" />
@@ -1271,18 +1515,15 @@ File: `app/src/main/AndroidManifest.xml`
         </intent>
     </queries>
 
-    <!-- No <uses-permission> entries required by v0.1. No network, no storage. -->
-
     <application
-        android:name=".AiLauncherApp"
+        android:name=".LauncherApp"
         android:allowBackup="false"
-        android:dataExtractionRules="@xml/data_extraction_rules"
+        android:dataExtractionRules="@xml/backup_rules"
         android:fullBackupContent="false"
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
-        android:roundIcon="@mipmap/ic_launcher_round"
         android:supportsRtl="true"
-        android:theme="@style/Theme.AiLauncher"
+        android:theme="@style/Theme.AILauncher"
         tools:targetApi="34">
 
         <activity
@@ -1290,235 +1531,186 @@ File: `app/src/main/AndroidManifest.xml`
             android:exported="true"
             android:launchMode="singleTask"
             android:stateNotNeeded="true"
-            android:resizeableActivity="true"
-            android:clearTaskOnLaunch="false"
-            android:windowSoftInputMode="adjustNothing"
-            android:theme="@style/Theme.AiLauncher">
+            android:excludeFromRecents="false"
+            android:windowSoftInputMode="adjustResize"
+            android:theme="@style/Theme.AILauncher.Splash">
 
-            <!-- FR-14: launcher intent filter -->
+            <!-- Standard launcher discovery -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
+                <category android:name="android.intent.category.LAUNCHER" />
+            </intent-filter>
+
+            <!-- FR-14: launcher / HOME eligibility -->
+            <intent-filter android:priority="1">
+                <action   android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
-                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
     </application>
 </manifest>
 ```
 
-`res/values/strings.xml` (seed):
+**Themes (`res/values/themes.xml`).** Single dark Material 3 theme with `Theme.Material3.DayNight.NoActionBar` as parent (night-only enforced via `uiMode` in code) and a `windowBackground = @color/bg_deep` so pre-Compose paint matches the gradient start color (prevents flash). `Theme.AILauncher.Splash` extends it with `android:windowSplashScreenBackground = @color/bg_deep` for API 31+ splash.
 
-```xml
-<resources>
-    <string name="app_name">AI Launcher</string>
-    <!-- FR-19 empty states, FR-17 banner, etc. Dev agent fills in. -->
-</resources>
-```
-
-`res/xml/data_extraction_rules.xml` — empty rules (no cloud backup for v0.1, NFR-06):
-
-```xml
-<?xml version="1.0" encoding="utf-8"?>
-<data-extraction-rules>
-    <cloud-backup><exclude domain="database" path="ai_launcher.db" /></cloud-backup>
-    <device-transfer><exclude domain="database" path="ai_launcher.db" /></device-transfer>
-</data-extraction-rules>
-```
+**Status / nav bars.** Set `window.statusBarColor = Color.TRANSPARENT`, `window.navigationBarColor = Color.TRANSPARENT`, and `WindowCompat.setDecorFitsSystemWindows(window, false)` in `MainActivity.onCreate` before `setContent { ... }`. Light icons via `WindowInsetsControllerCompat.isAppearanceLightStatusBars = false`. (NFR-11.)
 
 ---
 
 ## 12. Testing Architecture
 
-### 12.1 JVM unit tests (`src/test/`)
+### 12.1 Unit tests (JVM)
 
-**`EpsilonGreedyEngineTest`** — satisfies SM-07.
+Location: `app/src/test/java/com/bobpan/ailauncher/…`
 
-Construction:
+**Strategy.**
+- ViewModels tested with **Fake repositories** (hand-rolled, exposing `MutableSharedFlow` / `MutableStateFlow`) and **Turbine** for `StateFlow` assertions.
+- `RecommendationEngine` tested with **seeded `Random(42L)`** and synthetic `UserProfile`/catalog fixtures.
+- Coroutines tested via `kotlinx-coroutines-test`: `runTest { ... }` + `StandardTestDispatcher`.
+- `Clock` replaced with a `FakeClock(var now: Long)` in engine/VM tests so dwell timing is deterministic (FR-07 test hook).
+
+**Required test classes (minimum suite for v0.1):**
+
+| Class under test | Test class | Scenarios |
+|---|---|---|
+| `EpsilonGreedyEngine` | `EpsilonGreedyEngineTest` | cold-start order (empty profile → seed order); single-candidate no-explore; ≥2 candidates reserve 1 explore slot; ties break by seedOrder; biased profile at coffee +10 → SM-07 1000-iter test asserting position 0 stability and position 3 variability ≥50%; `setDeterministicMode(seed)` reproducibility |
+| `HomeViewModel` | `HomeViewModelTest` | cold-start default intent = WORK; `selectIntent` clears dismiss list for target intent; `submitFeedback` writes to fake repo; `dismissCard` adds to in-memory set AND records Signal.Dismiss; `trackDwell` < 2000ms short-circuits; FR-14 `onHomeButtonPressed` closes sheet; `restoreDismissedForActiveIntent` clears only active intent |
+| `FeedbackRepositoryImpl` | `FeedbackRepositoryImplTest` | FR-10 formula: 👍 +3 on 4-tag card → each tag +0.75; txn atomicity (both inserts or neither); `clearAll` clears both tables; `isHealthy` flips false on injected exception |
+| `ProfileDebugViewModel` | `ProfileDebugViewModelTest` | `Empty` emitted when count==0 && tags empty; `Loaded` emitted otherwise; `resetProfile` invokes repo.clearAll and `onDone` |
+| `AppDrawerViewModel` | `AppDrawerViewModelTest` | `Loading` → `Content` happy path; `Empty` when repo returns emptyList; `Error` on thrown |
+
+**Fake repository skeleton:**
+
 ```kotlin
-private val rng = Random(42L)
-private val engine = EpsilonGreedyEngine(
-    rngProvider = Provider { rng },
-    clock = TestClock(startMs = 1_700_000_000_000L)
-)
-```
-
-Key test cases:
-- `recommend_emptyProfile_returnsSeedOrder` — with `UserProfile.EMPTY`, 4 LUNCH cards, exploitation order equals seed order for the 3 exploitation slots; exploration slot is drawn from the remainder.
-- `recommend_biasedProfile_topIsExploitation` — given `profile.tagWeights = mapOf("coffee" to 10f)`, run 1000× with seeded RNG, assert position 0 is `lunch_01` (contains `coffee`) in all 1000 calls.
-- `recommend_explorationSlotVaries` — same run, assert position 3 (`available.size - 1`) is a non-top card in ≥500/1000 calls (satisfies SM-07 ≥50%).
-- `recommend_singleCard_returnsAsIs` — pool size 1.
-- `recommend_emptyPool_returnsEmpty`.
-- `recommend_tiesBreakBySeedOrder` — all-zero profile, explicit order preserved.
-
-**ViewModel tests** — use `FakeFeedbackRepository`, `FakeCardRepository`, `FakeProfileRepository` + real `EpsilonGreedyEngine(rng=Random(42L))` + `TestClock` + `kotlinx-coroutines-test` `runTest`.
-
-`FakeFeedbackRepository` stores a `MutableList<FeedbackEvent>` and a `MutableMap<String, Float>` for tags; `record(...)` applies the FR-10 formula. Suitable for SM-04 test on VM level.
-
-`TestClock`:
-```kotlin
-class TestClock(var nowMs: Long = 0L) : Clock {
-    override fun nowMillis(): Long = nowMs
-    fun advance(ms: Long) { nowMs += ms }
+class FakeFeedbackRepository : FeedbackRepository {
+    override val isHealthy = MutableStateFlow(true)
+    private val events = MutableStateFlow<List<FeedbackEventEntity>>(emptyList())
+    override fun observeCount()  = events.map { it.size }
+    override fun observeEvents() = events.asStateFlow()
+    val records = mutableListOf<Pair<Signal, Card>>()
+    override suspend fun record(signal: Signal, card: Card): Long? {
+        records += signal to card; events.update { it + stubEntity(signal, card) }; return 1L
+    }
+    override suspend fun clearAll() { events.value = emptyList(); records.clear() }
 }
 ```
 
-`MainDispatcherRule` sets `Dispatchers.Main` to `StandardTestDispatcher` for tests.
+### 12.2 Instrumented tests (minimized)
 
-**`HomeViewModelTest`** key cases:
-- Cold start → `HomeUiState.Ready` with hero = `work_01`, 3 discover cards (FR-01, SM-12).
-- Intent switch → state updates; intent switch within 500ms of feed render discards pending appearances (FR-04).
-- 2× 👎 on hero → hero cardId changes (SM-04).
-- Dismiss ✕ → card removed from discover list; DISMISS event recorded in FakeFeedbackRepo (SM-11).
-- All-dismissed → `EmptyState.AllDismissedForIntent` (FR-19).
-- Degraded mode → `FakeFeedbackRepository(isHealthy=false)` forces `HomeUiState.Degraded`.
+Location: `app/src/androidTest/java/com/bobpan/ailauncher/…`
 
-### 12.2 Instrumented tests (`src/androidTest/`)
+v0.1 ships **only a Room DAO smoke test** to prove the schema compiles and the transactional write works end-to-end. Everything else (SM-10 dwell, SM-11 dismiss, SM-12 cold-start) is executed as part of the **manual golden-path QA script** (PRD §6).
 
-Use `Room.inMemoryDatabaseBuilder(ctx, AppDatabase::class.java).allowMainThreadQueries().build()` per test.
+Required classes:
 
-- **`FeedbackDaoTest`**: insert → getAll, count, debounce-window query works, deleteAll.
-- **`UserProfileDaoTest`**: upsert replaces, `topByAbsWeight(10)` orders by `ABS(weight) DESC`, deleteAll.
-- **`CachedCardDaoTest`**: `insertAll(16) → count == 16`, `getByIntent(WORK)` returns 4 in seed order.
+| Test | Contract |
+|---|---|
+| `LauncherDatabaseSmokeTest` | Uses `Room.inMemoryDatabaseBuilder`. Inserts one `FeedbackEventEntity`, one `UserProfileEntry` upsert, one `CachedCardEntity`. Asserts `FeedbackDao.count() == 1`, `UserProfileDao.snapshot().single().weight > 0`, `CardDao.all().size == 1`. Verifies `Converters` round-trips a `List<String>`. |
 
-Clock injection per FR-07 applies to dwell-related tests (future Compose UI tests under `src/androidTest/`), but v0.1 instrumented coverage is DAO-only; Compose UI tests land in v0.2.
+No Compose UI tests in v0.1 (keeps CI fast; UI tested manually against DESIGN-v1).
 
-### 12.3 `AndroidJUnitRunner` config
+### 12.3 `Clock` injection (FR-07 compliance)
 
-Already set in `defaultConfig.testInstrumentationRunner`. No custom runner.
+- Production: `AppModule` binds `Clock.System`.
+- Tests: construct ViewModels/engine with `FakeClock` directly (they take `Clock` in the constructor). No Hilt test overrides needed for unit tests.
+- Instrumented: not used — the DAO smoke test does not exercise dwell.
 
 ---
 
-## 13. Performance Budgets (NFR)
+## 13. Performance Budgets (hitting PRD NFRs)
 
-NFR-01 (cold-start ≤500ms), NFR-02 (Room ≤50ms p95), NFR-03 (chip switch ≤200ms).
-
-**Compose stability rules (non-negotiable):**
-
-- All UI state classes (`HomeUiState.Ready`, `Card`, `TagWeight`, etc.) are **stable** (all `val`, no `List<Card>` without type args, no `kotlin.collections.Map` — use `kotlinx.collections.immutable.PersistentList` if we upgrade; for v0.1 `List<Card>` read from `MutableStateFlow` is marked `@Immutable` at class level).
-- Annotate all data classes returned from VMs with `@Immutable`.
-- `Card`, `AppDrawerItem`, and `TagWeight` get `@Immutable`.
-- Mark composable params that accept lambdas as `() -> Unit` not nullable.
-- No `remember { mutableStateOf(...) }` holding `List<Card>` — always drive via `collectAsStateWithLifecycle()` from `StateFlow`.
-
-**LazyColumn keying:**
-
-```kotlin
-LazyColumn {
-    items(
-        items = state.discover,
-        key = { it.id },
-        contentType = { it.type.name }
-    ) { card -> DiscoverCard(card = card, ...) }
-}
-```
-
-Same rule for `LazyVerticalGrid` in `AppDrawerScreen` with `key = { it.packageName }`.
-
-**Room indexes (already in §4):**
-
-- `feedback_events` indexes on `card_id`, `intent`, `timestamp_ms`.
-- `user_profile` index on `weight` for the top-10 query.
-- `cached_cards` index on `intent`.
-
-**Query plan targets:**
-
-- `FeedbackDao.count()` → index-only scan, <5ms typical.
-- `UserProfileDao.topByAbsWeight(10)` → sort over ≤~50 rows (small tag space), <5ms.
-- `CachedCardDao.getByIntent(intent)` → covered by index, ≤16 rows → trivial.
-
-**Macrobenchmark (v0.2 deliverable, stubbed in v0.1):** `:app:benchmark` variant reserved; v0.1 measures cold-start manually via `adb shell am start -W`.
-
-**Dispatcher discipline:**
-
-- Repositories switch to `@Named("ioDispatcher")` internally on DB calls via `withContext(io)`; ViewModels never block.
-- `RecommendationEngine.recommend` is pure synchronous and called from `Dispatchers.Default` within VM's `viewModelScope.launch(defaultDispatcher)`.
+| PRD target | Architectural mitigation |
+|---|---|
+| **NFR-01 · Cold start to Hero ≤500ms** | `LauncherApp.onCreate` does not touch Room on the main thread; `SeedInstaller.installIfEmpty()` runs on IO and races with first frame. `HomeViewModel.uiState.stateIn(WhileSubscribed(5_000), initialValue = Loading)` emits instantly. Themed splash (`Theme.AILauncher.Splash`) uses `@color/bg_deep` so the pre-compose paint is the gradient start color. Compose BOM 2024.12 + Material 3 baseline profile shipped by Google reduces first-frame cost. |
+| **NFR-02 · Room queries ≤50ms p95** | Hot columns indexed: `feedback_events(card_id, intent, timestamp_ms)`, `user_profile(weight)`, `cached_cards(intent)`. `top10Tags` query uses `ORDER BY ABS(weight) DESC LIMIT 10` which is index-assisted (weight index). The entire 16-row `cached_cards` fits in a single page — no N+1 risk. |
+| **NFR-03 · Intent switch ≤200ms** | `HomeUiState.Content` re-derivation is a pure `combine` operator; no DB round-trip on switch (catalog + profile already cached in flows). Engine is O(n·m) where n=16 cards, m≤8 tags ≈ 128 ops — sub-millisecond. |
+| **Compose skippability** | Every `UiState` + `Card` + `AppInfo` annotated `@Immutable`; collections are `List<*>` (kotlin's read-only interface, treated as immutable by Compose if the class is `@Immutable`). No `mutableStateListOf` passed through composables. |
+| **LazyColumn perf** | `items(state.feed, key = { it.id })` — stable keys guarantee `animateItemPlacement` correctness and recomposition skipping. `contentType = { it.type.name }` added for heterogeneous skip-lists when mixing Hero/Discover later (v0.2). |
+| **NFR-05 · No background work** | No `WorkManager` / `JobScheduler` / services in Manifest. DataStore is used only if needed (v0.1 uses nothing). All work in `viewModelScope`. |
+| **NFR-10 · APK ≤15MB** | No font asset; emoji-only icons. No bitmap resources in v0.1 beyond launcher icon. ProGuard can be enabled in v0.2; v0.1 ships `isMinifyEnabled = false` to keep dev-loop tight. |
 
 ---
 
-## 14. Security / Privacy
+## 14. Security & Privacy
 
-Per NFR-04, NFR-05, NFR-06:
-
-- **Permissions:** none declared. No `android.permission.INTERNET`, no runtime permissions. The absence of INTERNET is itself a build-time guarantee that no library performs network I/O.
-- **Network libraries:** forbidden in `app/build.gradle.kts`. A CI check (§15) asserts the dependency tree contains no `okhttp3`, `retrofit2`, `ktor`, `volley`.
-- **Backup:** `android:allowBackup="false"` + `data_extraction_rules.xml` excludes the Room DB from cloud backup and device transfer.
-- **Logging:** FR-20 `FLYWHEEL` logcat tag gated behind `BuildConfig.DEBUG`. Release builds emit no per-signal logs.
-- **Analytics:** none. No Firebase, no Crashlytics, no Sentry.
-- **Data location:** `/data/data/com.bobpan.ailauncher/databases/ai_launcher.db` (private app storage; not world-readable on any API level).
-- **Exports:** `MainActivity` is `android:exported="true"` **only** because Android 12+ requires it for launcher activities (FR-14). No other activity, service, receiver, or provider is exported.
-- **ProGuard:** release keeps Room entities, Hilt generated code, and kotlinx.serialization `@Serializable` classes. `proguard-rules.pro`:
-  ```
-  -keep class com.bobpan.ailauncher.data.db.entity.** { *; }
-  -keepnames class * extends androidx.room.RoomDatabase
-  -keep class kotlinx.serialization.** { *; }
-  -keep @kotlinx.serialization.Serializable class * { *; }
-  ```
+- **No `<uses-permission android:name="android.permission.INTERNET" />`** in the Manifest. Lint rule `MissingPermission` will flag any network call at build time, protecting NFR-06.
+- **Zero analytics / telemetry SDKs.** No Firebase, Crashlytics, Sentry, OkHttp, Retrofit, Ktor, Volley. The dependency graph contains nothing capable of opening a socket (verify via `./gradlew :app:dependencies | grep -i 'okhttp\|retrofit\|ktor\|firebase' → must be empty`).
+- **All data local** — Room DB at `/data/data/com.bobpan.ailauncher/databases/launcher.db`. No content-provider export.
+- **No dynamic code loading.** No `DexClassLoader`, no `Reflection.*`, no feature modules.
+- **Backup opt-out.** `android:allowBackup="false"` + `android:fullBackupContent="false"` + `android:dataExtractionRules="@xml/backup_rules"` with an empty rules file prevents the DB from being swept into cloud backup — even local-only data stays local-only.
+- **Logcat only.** FR-20 FLYWHEEL tag logs to logcat only; no file I/O, no network egress. Release build strips debug logs via R8 in v0.2; for v0.1 the dev panel is gated on `BuildConfig.DEBUG`.
+- **PackageManager queries** are read-only (`queryIntentActivities`, `getLaunchIntentForPackage`, `resolveActivity`) and require no permission on targetSdk 34 when paired with the `<queries>` block above.
 
 ---
 
 ## 15. Build / CI
 
-**Primary invariant:** `./gradlew :app:assembleDebug` must succeed at the end of every commit. The dev agent is expected to run this locally before every push.
+### 15.1 Existing workflows (verified compatible)
 
-**Local commands:**
+`.github/workflows/build-apk.yml` (present) runs:
+1. JDK 17 setup (matches §3 `compileOptions`).
+2. Android SDK setup.
+3. `chmod +x ./gradlew || true` — tolerates missing wrapper.
+4. `./gradlew :app:assembleDebug --stacktrace --no-daemon`.
+5. Uploads APK + Telegram notify.
+
+`.github/workflows/test.yml` runs `:app:testDebugUnitTest`.
+
+**Both workflows will pass as-is once the dev agent generates the Gradle wrapper.** Nothing in this architecture breaks them.
+
+### 15.2 First-build bootstrap (REQUIRED before CI succeeds)
+
+The repo ships without `gradlew`, `gradlew.bat`, `gradle/wrapper/gradle-wrapper.jar`, or `gradle-wrapper.properties`. The dev agent MUST run, on their local machine or inside the CI checkout step **before** the first `./gradlew` invocation:
 
 ```bash
-./gradlew :app:assembleDebug           # must be green
-./gradlew :app:testDebugUnitTest       # JVM tests
-./gradlew :app:connectedDebugAndroidTest   # instrumented (requires emulator/device)
-./gradlew :app:lintDebug               # Android lint
-./gradlew :app:dependencies            # for dep audit
+# Requires a pre-existing `gradle` on PATH (any version ≥7).
+gradle wrapper --gradle-version 8.11.1 --distribution-type bin
+chmod +x gradlew
+git add gradlew gradlew.bat gradle/wrapper/
+git commit -m "build: add gradle wrapper 8.11.1"
 ```
 
-**CI (GitHub Actions suggested, not required for v0.1):**
-
-```yaml
-# .github/workflows/android.yml
-name: Android CI
-on: [push, pull_request]
-jobs:
-  build:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-java@v4
-        with: { distribution: temurin, java-version: '17' }
-      - uses: gradle/actions/setup-gradle@v4
-      - run: ./gradlew :app:assembleDebug :app:testDebugUnitTest :app:lintDebug --no-daemon
-      - name: Dep audit (no network libs)
-        run: |
-          ! ./gradlew :app:dependencies --configuration debugRuntimeClasspath | grep -E 'okhttp|retrofit|ktor|volley'
+The generated `gradle/wrapper/gradle-wrapper.properties` must pin:
+```properties
+distributionUrl=https\://services.gradle.org/distributions/gradle-8.11.1-bin.zip
 ```
 
-**Versioning:** `versionCode = 1`, `versionName = "0.1.0"` for v0.1 ship.
+Once committed, both GitHub Actions workflows will succeed without modification (they already `chmod +x ./gradlew` defensively).
 
-**Build variants:**
+### 15.3 Local developer quickstart
 
-- `debug` — `minify=false`, `FLYWHEEL` logging on, FR-20 dev panel accessible, `RecommendationEngine.setDeterministicMode` callable.
-- `release` — `minify=true`, `shrinkResources=true`, ProGuard rules as §14, FR-20 gates disabled.
+```bash
+# One-time
+gradle wrapper --gradle-version 8.11.1 --distribution-type bin
+./gradlew :app:assembleDebug
 
-**Gradle JVM args** (in `gradle.properties`, already listed in §3.4): `-Xmx4g` to accommodate KSP + Room + Hilt processing on 16-GB CI runners.
+# Iterative
+./gradlew :app:testDebugUnitTest          # fast, JVM
+./gradlew :app:installDebug               # installs on attached device
+./gradlew :app:connectedDebugAndroidTest  # Room DAO smoke test
+```
+
+### 15.4 Schema export
+
+With `ksp.arg("room.schemaLocation", "$projectDir/schemas")`, Room will write versioned schemas to `app/schemas/com.bobpan.ailauncher.data.db.LauncherDatabase/1.json`. Commit this file alongside the DB — it is required for any future migration testing and for catching accidental schema drift.
 
 ---
 
-## Appendix A · Decisions not explicit in PRD-v2
+## Appendix A · Decisions not explicit in PRD-v2 / DESIGN-v1
 
-The PRD is deliberately prescriptive; the following architecture decisions resolve remaining latitude. All are logged here so nothing is implicit.
+The dev agent should treat these as **architectural decisions made here** (not bugs in upstream docs):
 
-1. **`CardType.HERO` as display role, not seed attribute.** PRD §5 lists HERO as a card type, but §9 seed data only uses CONTINUE/DISCOVER/NEW. Resolution: keep HERO in the enum (per task spec) and add a second field `displayType: CardType` on the runtime `Card` model. Hero rendering is a UI-layer concern; the engine is unaware.
-2. **`SignalType` is a flat enum, `Signal` is a sealed class.** The sealed class is the VM/UI vocabulary (carries per-signal payload like `Dwell.durationMs`); the enum is the persistence representation (simpler to store + query). `Signal.toType()` converts. This keeps the `feedback_events.signal` column a single TEXT.
-3. **`REVEAL_APPEARED` and `INTENT_SWITCH` as zero-weight signals.** These are useful for debugging the FR-07 state machine and FR-04 rapid-switch suppression via FR-20 logcat, but they must not alter `user_profile`. The `weight == 0f` short-circuit in `FeedbackRepositoryImpl.record` avoids the N-way `user_profile` upsert for them.
-4. **`CachedCardEntity` exists even though v0.1 serves seeds from memory.** AGENTS.md lists "cached cards" as a Room table, and `SeedLoader` maintains the invariant that on-disk and in-memory are identical at cold-start. This costs ~2KB of storage and makes v0.2 dynamic catalogs trivially pluggable.
-5. **`ConfidenceLevel` thresholds (5 / 20 events).** PRD mentions the concept but not bounds. Resolution: `LOW < 5`, `MEDIUM < 20`, `HIGH ≥ 20`. Pure UI concern, no engine impact.
-6. **`Provider<Random>` injection in `EpsilonGreedyEngine`.** PRD says the engine "accepts an injected Random"; using `Provider<Random>` rather than a direct `Random` lets the FR-20 `setDeterministicMode` runtime override coexist with the DI-provided instance without rebinding. Tests still bind `Random(42L)` directly and the Provider returns the same instance.
-7. **`datastore-preferences` is included in deps but not used in v0.1.** The PRD hard-scopes out persisting selected intent across cold starts. We keep the dependency because the FR-17 "banner dismissed for this process lifetime" flag, profile-sheet UI preferences, and v0.2 intent persistence will all land there; adding it now costs nothing and avoids a second Gradle sync when v0.2 begins.
-8. **Home-button re-entry is routed through `MainActivity.onNewIntent` + `HomeViewModel.onHomeButtonPressed()`.** PRD FR-14 lists 5 steps but not the wiring. Resolution: `launchMode="singleTask"` guarantees no activity restart; `onNewIntent` receives CATEGORY_HOME; the VM method performs all 5 steps in order on the main thread.
-9. **Bottom sheet state is Compose-local, not a Nav destination.** Material 3 `ModalBottomSheet` is not a screen; making it a nav route complicates FR-14 step 1 ("dismiss any open bottom sheet") by adding a backstack entry to pop. Keeping it in `HomeScreen` state is simpler and still satisfies the back-gesture requirement via `BackHandler`.
-10. **`kotlinx-coroutines-android` is the chosen coroutine dep.** PRD lists `kotlinx-coroutines-test` for tests but not the main-source dep; `kotlinx-coroutines-android` is the standard Android artifact and includes `Dispatchers.Main.immediate` used by VM launches.
-11. **`hilt-navigation-compose` added.** Not in the PRD-listed deps but required by `hiltViewModel()` in Compose — without it, `@HiltViewModel` VMs cannot be obtained from within a `composable { }` block. Treated as a transitive necessity of the locked Hilt + Compose stack.
-12. **`material-icons-extended` added.** The design uses ✦, ✓, ✕, 👍, 👎 glyphs; emoji render inline but dismiss ✕ and chip ✓ are Material icons (`Icons.Default.Close`, `Icons.Default.Check`). Needed to satisfy FR-03 and FR-05 touch targets with icon-only buttons.
-13. **`androidx.lifecycle-runtime-compose` added.** For `collectAsStateWithLifecycle()`, which is the recommended way to observe `StateFlow` from Compose and avoids wasted work while paused (relevant to NFR-05 battery and FR-07 pause-resume behavior).
+1. **Signal subclass set.** PRD-v2 §3 enumerates signal types but does not spell out a Kotlin sealed hierarchy. This doc defines 8 subclasses (`Tap / Dwell / Like / Dislike / Dismiss / ActionTapped / IntentSwitch / RevealAppeared`) with `cardId + timestampMs` on each. `Tap`, `IntentSwitch`, and `RevealAppeared` persist with `weight = 0f` for instrumentation; they do not alter profile weights. This is consistent with PRD-v2 §3 item 2's explicit weight table (which enumerates only the 5 profile-modifying signals).
+2. **Room conflict strategy.** FR-09 does not specify. This doc uses `OnConflictStrategy.ABORT` on `feedback_events.insert` (auto-generated PK makes conflicts impossible) and `OnConflictStrategy.REPLACE` on `cached_cards` seed insert (idempotent re-seed if count was nonzero but mismatched).
+3. **Profile top-tag sort order.** FR-12 says "top 10 tags by weight, sorted descending by absolute weight so strongly-negative tags are visible". This doc implements that via `UserProfileDao.observeTopByAbs(limit)` using `ORDER BY ABS(weight) DESC`.
+4. **`@Named("recEngineRng")` vs typed qualifier.** FR-11 literally says `@Named("recEngineRng") Random`. This doc honors that but also declares a typed `@RecEngineRng` qualifier for the dev agent's optional use.
+5. **`CardType.HERO` enum value.** DESIGN-v1 uses "Hero" as a slot concept; this doc adds `CardType.HERO` to the enum for completeness, but **no seed card uses it** — the Hero slot is derived at render time from `recommend()` position 0.
+6. **`Clock` is an internal interface, not `kotlinx-datetime`.** To keep APK size down (NFR-10) and avoid a new dep, `Clock` is a 1-method internal interface with a `System` singleton. Upgrade to `kotlinx-datetime` deferred to v0.2.
+7. **Seed install lives in `LauncherApp.onCreate`** (fire-and-forget IO coroutine). DESIGN-v1 §2.1 shows it inside the cold-boot flow but does not pick a trigger point; putting it in `Application.onCreate` ensures it races with the first frame rather than blocking the first `CardRepository.observeAll()` subscription.
+8. **Dwell timer lives in a `util/Dwell.kt` helper owned by `HomeScreen`**, not in `HomeViewModel` — the VM receives `trackDwell(card, durationMs)` when the helper decides an Appearance has crossed 2000ms, keeping the VM framework-free (no `onGloballyPositioned` leakage). This matches DESIGN-v1 §5.3 "The card itself holds no dwell state".
+9. **ProGuard/R8** disabled in v0.1 for both build types (consistent with AGENTS.md dev-loop priority). Release APK is debug-signed by CI — `isMinifyEnabled = false` on release is intentional v0.1 debt.
+10. **No `androidx.compose.foundation` pinned separately** — it is transitively delivered by the Compose BOM 2024.12.01 via `material3`. Adding an explicit dep would risk version skew.
 
 ---
 

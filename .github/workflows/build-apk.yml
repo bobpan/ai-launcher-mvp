@@ -1,0 +1,74 @@
+name: Build Debug APK
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Build APK
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up JDK 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+          cache: gradle
+
+      - name: Setup Android SDK
+        uses: android-actions/setup-android@v3
+
+      - name: Grant gradlew permission
+        run: chmod +x ./gradlew || true
+
+      - name: Build Debug APK
+        run: ./gradlew :app:assembleDebug --stacktrace --no-daemon
+
+      - name: Locate APK
+        id: locate
+        run: |
+          APK=$(find app/build/outputs/apk/debug -name "*.apk" | head -1)
+          echo "apk_path=$APK" >> $GITHUB_OUTPUT
+          echo "Found APK: $APK"
+          ls -lh "$APK"
+
+      - name: Upload APK artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ai-launcher-debug-apk
+          path: ${{ steps.locate.outputs.apk_path }}
+          retention-days: 30
+
+      - name: Notify Telegram on success
+        if: success() && env.TELEGRAM_BOT_TOKEN != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          APK="${{ steps.locate.outputs.apk_path }}"
+          SIZE=$(du -h "$APK" | awk '{print $1}')
+          CAPTION="✅ AI Launcher build #${{ github.run_number }}%0A%0A🔖 Commit: \`${GITHUB_SHA::7}\`%0A📦 Size: ${SIZE}%0A🌿 Branch: ${GITHUB_REF_NAME}"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendDocument" \
+            -F chat_id="${TELEGRAM_CHAT_ID}" \
+            -F document="@${APK}" \
+            -F caption="${CAPTION}" \
+            -F parse_mode="Markdown" || echo "Telegram notify failed (non-fatal)"
+
+      - name: Notify Telegram on failure
+        if: failure() && env.TELEGRAM_BOT_TOKEN != ''
+        env:
+          TELEGRAM_BOT_TOKEN: ${{ secrets.TELEGRAM_BOT_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
+        run: |
+          MSG="❌ AI Launcher build #${{ github.run_number }} FAILED%0ACommit: ${GITHUB_SHA::7}%0A[View logs](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})"
+          curl -s -X POST "https://api.telegram.org/bot${TELEGRAM_BOT_TOKEN}/sendMessage" \
+            -d chat_id="${TELEGRAM_CHAT_ID}" \
+            -d text="${MSG}" \
+            -d parse_mode="Markdown" || true

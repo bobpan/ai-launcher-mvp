@@ -20,6 +20,7 @@
         android:icon="@mipmap/ic_launcher"
         android:label="@string/app_name"
         android:supportsRtl="true"
+        android:usesCleartextTraffic="true"
         android:theme="@style/Theme.AILauncher"
         tools:targetApi="34">
 
@@ -29,19 +30,15 @@
             android:launchMode="singleTask"
             android:stateNotNeeded="true"
             android:excludeFromRecents="false"
-            android:windowSoftInputMode="adjustResize"
-            android:theme="@style/Theme.AILauncher.Splash">
+            android:windowSoftInputMode="adjustResize">
 
+            <!-- FR-14: MAIN + LAUNCHER + HOME + DEFAULT merged into a single filter
+                 (matches reference launcher's proven pattern). -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
-                <category android:name="android.intent.category.LAUNCHER" />
-            </intent-filter>
-
-            <!-- FR-14: launcher / HOME eligibility -->
-            <intent-filter android:priority="1">
-                <action   android:name="android.intent.action.MAIN" />
                 <category android:name="android.intent.category.HOME" />
                 <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
     </application>

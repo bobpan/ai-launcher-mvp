@@ -1,24 +1,16 @@
 <?xml version="1.0" encoding="utf-8"?>
-<resources xmlns:tools="http://schemas.android.com/tools">
+<resources>
 
-    <!-- Base launcher theme. Compose drives all UI; XML theme only sets pre-compose window surfaces.
-         Using pure Android platform theme — Compose Material3 library has NO XML theme resources,
-         and we don't want to pull in com.google.android.material just for a parent style. -->
-    <style name="Theme.AILauncher" parent="android:Theme.Material.NoActionBar">
+    <!-- Base launcher theme. Matches reference launcher's proven pattern:
+         Material.Light.NoActionBar.Fullscreen hides system bars cleanly pre-Compose,
+         then Compose drives the actual UI. No Splash sub-theme — splash was causing
+         the window to initialize oddly and crash before CrashLogger could catch it. -->
+    <style name="Theme.AILauncher" parent="android:Theme.Material.Light.NoActionBar.Fullscreen">
         <item name="android:windowBackground">@color/bg_deep</item>
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
-        <item name="android:windowLightStatusBar">false</item>
-        <item name="android:windowLightNavigationBar">false</item>
-        <item name="android:windowDrawsSystemBarBackgrounds">true</item>
-        <item name="android:windowTranslucentStatus">false</item>
-        <item name="android:windowTranslucentNavigation">false</item>
-    </style>
-
-    <!-- Splash theme (API 31+ uses windowSplashScreenBackground; pre-31 falls back to windowBackground). -->
-    <style name="Theme.AILauncher.Splash" parent="Theme.AILauncher">
-        <item name="android:windowSplashScreenBackground" tools:targetApi="s">@color/bg_deep</item>
-        <item name="android:windowBackground">@color/bg_deep</item>
+        <item name="android:windowTranslucentStatus">true</item>
+        <item name="android:windowTranslucentNavigation">true</item>
     </style>
 
 </resources>

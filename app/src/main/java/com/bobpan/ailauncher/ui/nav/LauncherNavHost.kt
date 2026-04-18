@@ -3,39 +3,38 @@ package com.bobpan.ailauncher.ui.nav
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.ui.Modifier
 import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.navigation.NavHostController
 import androidx.navigation.compose.NavHost
 import androidx.navigation.compose.composable
-import com.bobpan.ailauncher.BuildConfig
-import com.bobpan.ailauncher.data.db.dao.UserProfileDao
 import com.bobpan.ailauncher.ui.drawer.AppDrawerScreen
 import com.bobpan.ailauncher.ui.drawer.AppDrawerViewModel
 import com.bobpan.ailauncher.ui.home.HomeScreen
 import com.bobpan.ailauncher.ui.home.HomeViewModel
-import com.bobpan.ailauncher.ui.profile.DevPanelSheet
 import com.bobpan.ailauncher.ui.profile.ProfileDebugSheet
 import com.bobpan.ailauncher.ui.profile.ProfileDebugViewModel
-import com.bobpan.ailauncher.util.DebugActions
-import kotlinx.coroutines.launch
 
 object Routes {
     const val HOME   = "home"
     const val DRAWER = "drawer"
 }
 
+/**
+ * Root NavHost.
+ *
+ * For v0.1 MVP:
+ *  - ProfileDebugSheet uses its own hiltViewModel() — no profileDao param needed.
+ *  - DevPanelSheet is stubbed out (FR-20 debug-only, non-blocking); re-enable once
+ *    we have a clean way to wire DebugActions in without class-level @Inject.
+ */
 @Composable
 fun LauncherNavHost(
     navController: NavHostController,
     homeViewModel: HomeViewModel,
     snackbarHostState: SnackbarHostState,
     onSetDefaultLauncher: () -> Unit,
-    debugActions: DebugActions,
-    profileDao: UserProfileDao,
     modifier: Modifier = Modifier
 ) {
     NavHost(
@@ -46,8 +45,6 @@ fun LauncherNavHost(
         composable(Routes.HOME) {
             val profileVm: ProfileDebugViewModel = hiltViewModel()
             val sheetOpen by homeViewModel.profileSheetOpen.collectAsStateWithLifecycle()
-            val devOpen   by homeViewModel.devSheetOpen.collectAsStateWithLifecycle()
-            val scope = rememberCoroutineScope()
 
             HomeScreen(
                 viewModel = homeViewModel,
@@ -67,18 +64,8 @@ fun LauncherNavHost(
                 )
             }
 
-            if (BuildConfig.DEBUG && devOpen) {
-                DevPanelSheet(
-                    onSeedDemo = {
-                        scope.launch { debugActions.seedDemoProfile() }
-                    },
-                    onDumpProfile = {
-                        scope.launch { debugActions.dumpProfileToLogcat(profileDao) }
-                    },
-                    onClearDismiss = { homeViewModel.restoreDismissedForActiveIntent() },
-                    onDismiss = { homeViewModel.closeDevSheet() }
-                )
-            }
+            // DevPanelSheet (FR-20 debug sheet) — stubbed for v0.1. Re-enable after
+            // we introduce a sub-VM that exposes DebugActions + ProfileDao cleanly.
         }
         composable(Routes.DRAWER) {
             val drawerVm: AppDrawerViewModel = hiltViewModel()

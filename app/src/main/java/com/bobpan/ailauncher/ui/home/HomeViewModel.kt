@@ -12,9 +12,11 @@ import com.bobpan.ailauncher.data.model.UserProfile
 import com.bobpan.ailauncher.data.repo.CardRepository
 import com.bobpan.ailauncher.data.repo.FeedbackRepository
 import com.bobpan.ailauncher.data.repo.ProfileRepository
+import com.bobpan.ailauncher.data.seed.SeedInstaller
 import com.bobpan.ailauncher.domain.recommend.RecommendationEngine
 import com.bobpan.ailauncher.util.AppDispatchers
 import com.bobpan.ailauncher.util.Clock
+import com.bobpan.ailauncher.util.CrashLogger
 import dagger.hilt.android.lifecycle.HiltViewModel
 import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -36,8 +38,25 @@ class HomeViewModel @Inject constructor(
     private val engine:             RecommendationEngine,
     private val clock:              Clock,
     private val dispatchers:        AppDispatchers,
+    private val seedInstaller:      SeedInstaller,
     @Suppress("UNUSED_PARAMETER") savedState: SavedStateHandle
 ) : ViewModel() {
+
+    init {
+        // FR-16: first-boot seed. Moved here from LauncherApp.onCreate so that
+        // Application never has to eagerly materialize a DB-backed dependency
+        // (that was crashing before CrashLogger could install its handler).
+        viewModelScope.launch(dispatchers.io) {
+            try {
+                CrashLogger.crumb("HomeViewModel: SeedInstaller.installIfEmpty begin")
+                seedInstaller.installIfEmpty()
+                CrashLogger.crumb("HomeViewModel: SeedInstaller.installIfEmpty done")
+            } catch (t: Throwable) {
+                CrashLogger.crumb("HomeViewModel: SeedInstaller failed: ${t.javaClass.simpleName}: ${t.message}")
+                Log.e("HomeViewModel", "SeedInstaller.installIfEmpty failed", t)
+            }
+        }
+    }
 
     private val _selectedIntent    = MutableStateFlow(Intent.WORK)
     private val _dismissedByIntent = MutableStateFlow<Map<Intent, Set<String>>>(emptyMap())

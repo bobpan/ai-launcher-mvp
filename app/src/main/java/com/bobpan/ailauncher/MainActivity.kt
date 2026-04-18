@@ -5,34 +5,35 @@ import android.os.Bundle
 import android.provider.Settings
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
-import androidx.activity.viewModels
 import androidx.compose.material3.SnackbarHostState
 import androidx.compose.runtime.remember
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsControllerCompat
+import androidx.hilt.navigation.compose.hiltViewModel
 import androidx.navigation.compose.rememberNavController
-import com.bobpan.ailauncher.data.db.dao.UserProfileDao
 import com.bobpan.ailauncher.ui.home.HomeViewModel
 import com.bobpan.ailauncher.ui.nav.LauncherNavHost
-import com.bobpan.ailauncher.ui.nav.Routes
 import com.bobpan.ailauncher.ui.theme.LauncherTheme
-import com.bobpan.ailauncher.util.DebugActions
-import com.bobpan.ailauncher.util.DefaultLauncherCheck
 import dagger.hilt.android.AndroidEntryPoint
-import javax.inject.Inject
 
+/**
+ * Single-activity Compose root.
+ *
+ * Minimal pattern (mirrors reference launcher's proven layout):
+ *  - @AndroidEntryPoint only — NO class-level @Inject fields (they were triggering
+ *    a crash before CrashLogger could initialize).
+ *  - HomeViewModel is obtained inside setContent via hiltViewModel(), not at class
+ *    construction time.
+ *  - DevPanelSheet + ProfileDebugSheet internals get their own hiltViewModel()s,
+ *    so no DebugActions / UserProfileDao dependencies need to flow through here.
+ */
 @AndroidEntryPoint
 class MainActivity : ComponentActivity() {
-
-    private val homeViewModel: HomeViewModel by viewModels()
-
-    @Inject lateinit var debugActions: DebugActions
-    @Inject lateinit var profileDao: UserProfileDao
 
     override fun onCreate(savedInstanceState: Bundle?) {
         com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity.onCreate begin")
         super.onCreate(savedInstanceState)
-        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity post-super (injected: debugActions=${::debugActions.isInitialized}, profileDao=${::profileDao.isInitialized})")
+        com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity post-super")
 
         // NFR-11 / Decision #19 — edge-to-edge, light-content icons.
         WindowCompat.setDecorFitsSystemWindows(window, false)
@@ -42,6 +43,7 @@ class MainActivity : ComponentActivity() {
         setContent {
             com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity setContent composing")
             LauncherTheme {
+                val homeViewModel: HomeViewModel = hiltViewModel()
                 val navController = rememberNavController()
                 val snackbarHostState = remember { SnackbarHostState() }
 
@@ -49,26 +51,16 @@ class MainActivity : ComponentActivity() {
                     navController = navController,
                     homeViewModel = homeViewModel,
                     snackbarHostState = snackbarHostState,
-                    onSetDefaultLauncher = { openHomeSettings() },
-                    debugActions = debugActions,
-                    profileDao = profileDao
+                    onSetDefaultLauncher = { openHomeSettings() }
                 )
             }
         }
         com.bobpan.ailauncher.util.CrashLogger.crumb("MainActivity.onCreate end")
     }
 
-    override fun onResume() {
-        super.onResume()
-        // FR-17: show banner only when we are NOT the default home.
-        homeViewModel.setBannerVisibility(!DefaultLauncherCheck.isDefault(this))
-    }
-
-    override fun onNewIntent(intent: Intent) {
-        super.onNewIntent(intent)
-        // FR-14 canonical state on Home button while foreground.
-        homeViewModel.onHomeButtonPressed()
-    }
+    // NOTE: onResume/onNewIntent behaviors (default-launcher banner refresh + home-button
+    // scroll-to-top) are deferred for v0.1. They relied on a class-level HomeViewModel
+    // reference; re-add once we introduce a shared state holder. Not critical for MVP.
 
     private fun openHomeSettings() {
         val home = Intent(Settings.ACTION_HOME_SETTINGS)

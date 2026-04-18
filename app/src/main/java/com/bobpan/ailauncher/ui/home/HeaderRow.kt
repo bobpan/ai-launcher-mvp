@@ -3,6 +3,7 @@ package com.bobpan.ailauncher.ui.home
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -95,7 +96,7 @@ private fun ProfileBadge(
         modifier = Modifier
             .size(48.dp)
             .pointerInput(Unit) {
-                androidx.compose.foundation.gestures.detectTapGestures(
+                detectTapGestures(
                     onTap = { onClick() },
                     onLongPress = { onLongPress() }
                 )

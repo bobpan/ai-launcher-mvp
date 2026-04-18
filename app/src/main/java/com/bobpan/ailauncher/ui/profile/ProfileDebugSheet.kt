@@ -1,5 +1,6 @@
 package com.bobpan.ailauncher.ui.profile
 
+import com.bobpan.ailauncher.ui.components.ProfileDebugRow
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column

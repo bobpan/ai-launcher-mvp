@@ -21,7 +21,6 @@ class DebugActions @Inject constructor(
     /** Inserts ~20 synthetic signals biased toward coffee/design/music. */
     suspend fun seedDemoProfile() {
         val catalog = cardRepository.all()
-        fun card(id: String) = catalog.firstOrNull { it.id == id } ?: return
         val now = clock.nowMs()
 
         // Helper — only emit if the target card exists in the live catalog.

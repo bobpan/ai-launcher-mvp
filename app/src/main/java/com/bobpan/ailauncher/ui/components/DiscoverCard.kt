@@ -29,10 +29,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.layout.findRootCoordinates
 import androidx.compose.ui.layout.onGloballyPositioned
-import androidx.compose.ui.layout.positionInWindow
+import androidx.compose.ui.layout.positionInRoot
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.mergeDescendants
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.tooling.preview.Preview
@@ -92,14 +91,14 @@ fun DiscoverCard(
             .onGloballyPositioned { coords ->
                 val h = coords.size.height.toFloat().coerceAtLeast(1f)
                 val root = coords.findRootCoordinates()
-                val windowTop = coords.positionInWindow().y
+                val windowTop = coords.positionInRoot().y
                 val windowBottom = windowTop + h
                 val visibleTop = maxOf(windowTop, 0f)
                 val visibleBottom = minOf(windowBottom, root.size.height.toFloat())
                 val visible = (visibleBottom - visibleTop).coerceAtLeast(0f)
                 onVisibilityChange(visible / h)
             }
-            .semantics { mergeDescendants = true }
+            .semantics(mergeDescendants = true) {}
     ) {
         Row(Modifier.fillMaxWidth()) {
             if (card.type == CardType.NEW) {

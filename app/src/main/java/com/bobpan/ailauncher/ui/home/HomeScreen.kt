@@ -141,17 +141,18 @@ fun HomeScreen(
 
             item("hero") {
                 content?.let { c ->
-                    if (c.allDismissed || c.heroCard == null) {
+                    val hero = c.heroCard
+                    if (c.allDismissed || hero == null) {
                         EmptyIntentState(onRestore = { viewModel.restoreDismissedForActiveIntent() })
                     } else {
                         val fraction = if (c.maxScore > 0f) {
-                            (c.scores[c.heroCard.id] ?: 0f) / c.maxScore
+                            (c.scores[hero.id] ?: 0f) / c.maxScore
                         } else 0.08f
                         HeroForYouCard(
-                            card = c.heroCard,
-                            onThumbUp    = { viewModel.submitFeedback(c.heroCard, com.bobpan.ailauncher.data.model.Signal.Like(c.heroCard.id, clock.nowMs())) },
-                            onThumbDown  = { viewModel.submitFeedback(c.heroCard, com.bobpan.ailauncher.data.model.Signal.Dislike(c.heroCard.id, clock.nowMs())) },
-                            onAction     = { viewModel.onCardAction(c.heroCard) },
+                            card = hero,
+                            onThumbUp    = { viewModel.submitFeedback(hero, com.bobpan.ailauncher.data.model.Signal.Like(hero.id, clock.nowMs())) },
+                            onThumbDown  = { viewModel.submitFeedback(hero, com.bobpan.ailauncher.data.model.Signal.Dislike(hero.id, clock.nowMs())) },
+                            onAction     = { viewModel.onCardAction(hero) },
                             fraction     = fraction,
                             pulseToken   = heroPulseToken,
                             storageHealthy = c.storageHealthy

@@ -33,7 +33,6 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.semantics.contentDescription
-import androidx.compose.ui.semantics.mergeDescendants
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
@@ -101,7 +100,7 @@ fun HeroForYouCard(
                 accent = borderAccent
             )
             .padding(Space.lg)
-            .semantics { mergeDescendants = true }
+            .semantics(mergeDescendants = true) {}
     ) {
         Column(
             verticalArrangement = Arrangement.spacedBy(Space.sm),

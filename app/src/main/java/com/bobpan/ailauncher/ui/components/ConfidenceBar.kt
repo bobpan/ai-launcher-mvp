@@ -1,6 +1,7 @@
 package com.bobpan.ailauncher.ui.components
 
 import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxWidth
@@ -30,7 +31,7 @@ fun ConfidenceBar(
     val clamped = fraction.coerceIn(0.08f, 1f)
     val animated by animateFloatAsState(
         targetValue = clamped,
-        animationSpec = Motion.heroCrossfade(),
+        animationSpec = tween(durationMillis = Motion.DUR_MEDIUM, easing = Motion.Standard),
         label = "confidence_fraction"
     )
 
